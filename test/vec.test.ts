@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { centroid, decide, dot, fromBlob, medoid, normalize, sweep, threshClusters, toBlob, topK } from '../src/vec.ts';
+import { centroid, decide, decideVote, dot, headingOf, knnVote, fromBlob, medoid, normalize, sweep, threshClusters, toBlob, topK } from '../src/vec.ts';
 import { embedText, ghNumberOfTitle, prNumberOf, refsOf } from '../src/util.ts';
 import { parseThemeLabel } from '../src/linear.ts';
 
@@ -68,4 +68,39 @@ test('課題の題名とテーマのラベル', () => {
 
 test('埋め込み用の文から番号と URL を落とす', () => {
   assert.equal(embedText('満月の物語：自動で読む (#520)', 'https://example.com/x 本文'), '満月の物語：自動で読む 本文');
+});
+
+test('見出しは先頭の「…：」から取る', () => {
+  assert.equal(headingOf('予報の履歴：保存した電文を読む (#250)'), '予報の履歴');
+  assert.equal(headingOf('core: 日照 0 の時間'), 'core');
+  assert.equal(headingOf('見出しのない普通の文'), null);
+  assert.equal(headingOf('見出しにしては長すぎる文がここまで続いてから出てくる：コロン'), null);
+});
+
+test('多数決：近い手本の多いラベルが勝ち、見出しが同じなら加点される', () => {
+  const ex = [
+    { vec: v(1, 0.1), label: 'A', heading: 'x', key: '1' },
+    { vec: v(1, 0.2), label: 'A', heading: 'x', key: '2' },
+    { vec: v(1, 0.15), label: 'B', heading: 'y', key: '3' },
+    { vec: v(0, 1), label: 'C', heading: null, key: '4' },
+  ];
+  const r = knnVote(v(1, 0.15), 'x', ex, { k: 3 });
+  assert.equal(r[0].id, 'A');
+  assert.ok(r[0].score > 0.7 && r[0].score <= 1);
+  const s = r.reduce((a, b) => a + b.score, 0);
+  assert.ok(Math.abs(s - 1) < 1e-6);
+  // 見出しが y なら B の票が増える
+  const r2 = knnVote(v(1, 0.15), 'y', ex, { k: 3 });
+  assert.ok(r2.find(x => x.id === 'B')!.score > r.find(x => x.id === 'B')!.score);
+  // 自分を抜く
+  const r3 = knnVote(v(1, 0.15), null, ex, { k: 1, skip: e => e.key === '3' });
+  assert.notEqual(r3[0].id, 'B');
+});
+
+test('票の割合としきい値、手本との近さの下限で決める', () => {
+  assert.equal(decideVote([{ id: 'A', score: 0.9, sim: 0.8 }], 0.75, 0.5, 0.5).level, 'auto');
+  assert.equal(decideVote([{ id: 'A', score: 0.6, sim: 0.8 }], 0.75, 0.5, 0.5).level, 'pending');
+  assert.equal(decideVote([{ id: 'A', score: 0.4, sim: 0.8 }], 0.75, 0.5, 0.5).level, 'none');
+  assert.equal(decideVote([{ id: 'A', score: 1, sim: 0.3 }], 0.75, 0.5, 0.5).level, 'none');
+  assert.equal(decideVote([], 0.75, 0.5, 0.5).level, 'none');
 });

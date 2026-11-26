@@ -82,7 +82,7 @@ async function assign(env: Env, body: { sha?: string; issue?: string | null; the
 }
 
 async function saveSettings(env: Env, body: Record<string, unknown>) {
-  const allowed = ['issue_auto', 'issue_ask', 'theme_auto', 'theme_ask', 'cluster_link', 'cluster_min', 'premise_min'];
+  const allowed = ['issue_auto', 'issue_ask', 'theme_auto', 'theme_ask', 'cluster_link', 'cluster_min', 'premise_min', 'min_sim'];
   const now = nowIso();
   const stmts: D1PreparedStatement[] = [];
   for (const [k, v] of Object.entries(body)) {
