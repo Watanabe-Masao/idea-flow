@@ -27,7 +27,11 @@ test('ファイルから機能、Issue から機能（本文の「機能：」�
 
 test('weather-note-cf のカタログは、正規表現が正しく、データとのつながりが一覧にある', () => {
   const c = CATALOGS['Watanabe-Masao/weather-note-cf'];
-  assert.equal(c.features.length, 22);
+  assert.equal(c.features.length, 27);
+  // 見た目・文書・テストは、ほかに当たらないときだけ
+  assert.deepEqual(featuresOfFiles(c, ['src/ui/MoonStory.tsx', 'src/styles.css', 'e2e/e2e.py']), ['story']);
+  assert.deepEqual(featuresOfFiles(c, ['src/styles.css', 'e2e/e2e.py']), ['look', 'ci']);
+  assert.deepEqual(featuresOfFiles(c, ['worker/src/index.ts', 'test/x.test.ts']), ['store']);
   for (const f of c.features) { for (const rx of f.files) new RegExp(rx); for (const k of f.data) assert.ok(c.nodes[k], `${f.id} の ${k}`); }
   assert.deepEqual(featuresOfFiles(c, ['src/ui/MoonStory.tsx']), ['story']);
 });

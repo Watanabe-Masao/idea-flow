@@ -5,7 +5,8 @@ import { gh, ghHeaders, REPO_RE } from './gh.ts';
 import { jstDay, nowIso } from './util.ts';
 import { CATALOGS } from './catalogs.ts';
 
-export interface Feature { id: string; group: string; name: string; desc: string; files: string[]; data: string[]; aliases: string[] }
+/** fallback：見た目・文書・テストのように、ほかの機能の作業にもついてくるもの。ほかに当たらないときだけ数える */
+export interface Feature { id: string; group: string; name: string; desc: string; files: string[]; data: string[]; aliases: string[]; fallback?: boolean }
 export interface Catalog {
   features: Feature[];
   nodes: Record<string, { col: number; name: string; note: string }>;
@@ -21,7 +22,9 @@ type Issue = { number: number; open: number; title: string; body: string; create
 
 /** 変えたファイルから機能を決める（その機能の files のどれかに当たれば、その機能の作業） */
 export function featuresOfFiles(cat: Catalog, files: string[]) {
-  return cat.features.filter(f => f.files.some(rx => { const re = new RegExp(rx); return files.some(p => re.test(p)); })).map(f => f.id);
+  const hit = (f: Feature) => f.files.some(rx => { const re = new RegExp(rx); return files.some(p => re.test(p)); });
+  const main = cat.features.filter(f => !f.fallback && hit(f));
+  return (main.length ? main : cat.features.filter(f => f.fallback && hit(f))).map(f => f.id);
 }
 
 /**
