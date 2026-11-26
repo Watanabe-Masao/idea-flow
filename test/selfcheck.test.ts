@@ -61,3 +61,11 @@ test('作品ごとの話題は機能名に吸い込まれない（レビュー�
   // タグが無くても、題に作品名があれば話題に入る（#411）
   assert.deepEqual(topicsOf(wn, '満月の物語とイベントの見出し：コールドムーンの絵本と残り', ''), ['コールドムーン']);
 });
+
+test('申告の見出しは、コードブロックの中の見本では合格にしない・題の頭はいちばん長く合う機能名で', () => {
+  const body = '関連：なし\n書き方の見本：\n```\n## 確かめた決まり\n- a\n## 決まりになく、自分で判断した所\n- b\n## 足りなかった決まり\n- c\n```';
+  assert.equal(checkPr(cat, { title: '地図の画面：x', body, files: [] }, issues).find(x => x.what.startsWith('申告'))!.ok, false);
+  const r = checkPr(cat, { title: '地図の計算：同期', body: '関連：なし' + REPORT, files: ['src/workmap.ts'] }, issues);
+  assert.match(r[0].what, /（地図の計算と取り込み）/);
+  assert.equal(r[2].ok, true); // 題の機能とファイルの機能が合う
+});

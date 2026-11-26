@@ -245,8 +245,12 @@ export function parseReport(body: string) {
   const KEYS: [keyof typeof sec, RegExp][] = [['read', /確かめた決まり/], ['own', /自分で判断/], ['lack', /足りなかった決まり/]];
   let cur: keyof typeof sec | null = null;
   const found = new Set<keyof typeof sec>();
+  let fence = false;
   for (const raw of String(body ?? '').split(/\r?\n/)) {
     const line = raw.trim();
+    // コードブロック（``` や ~~~ で囲んだ所）の中は読まない。書き方の見本を貼っただけで合格にしない
+    if (/^(```|~~~)/.test(line)) { fence = !fence; continue; }
+    if (fence) continue;
     const head = line.match(/^(#{1,6}\s+|\*\*)(.+?)(\*\*)?[:：]?$/);
     if (head) { const k = KEYS.find(([, re]) => re.test(head[2])); cur = k ? k[0] : null; if (k) found.add(k[0]); continue; }
     if (!cur) continue;

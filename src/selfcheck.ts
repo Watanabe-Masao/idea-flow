@@ -24,7 +24,10 @@ const show = (xs: Item[]) => xs.map(x => `${x.ok === true ? '✓' : x.ok === fal
 function featureOfTitle(cat: Catalog, title: string) {
   const head = title.split(/[：:]/)[0].trim();
   if (head === title.trim()) return { head: null, f: null };
-  const f = cat.features.find(x => x.name === head || x.name.replace(/（.*）/, '') === head || x.aliases.includes(head) || x.aliases.some(a => a && head.startsWith(a)));
+  // ぴったり合う名前・別名を先に。無ければ、いちばん長く頭が合う別名（「地図の計算」を「地図」より先に）
+  const exact = cat.features.find(x => x.name === head || x.name.replace(/（.*）/, '') === head || x.aliases.includes(head));
+  const pre = cat.features.flatMap(x => [x.name.replace(/（.*）/, ''), ...x.aliases].filter(a => a && head.startsWith(a)).map(a => ({ x, len: a.length }))).sort((a, b) => b.len - a.len)[0]?.x;
+  const f = exact ?? pre;
   return { head, f: f ?? null };
 }
 const names = (cat: Catalog) => cat.features.map(f => `${f.name.replace(/（.*）/, '')}${f.aliases.length ? `（別名：${f.aliases.slice(0, 3).join('・')}）` : ''}`).join('、');
