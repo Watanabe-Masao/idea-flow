@@ -51,24 +51,23 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
     const url = new URL(String(u));
     if (url.pathname === '/graphql') {
       gql++;
-      const v = JSON.parse(String(init!.body)).variables;
-      const start = v.after ? Number(v.after) : 0, part = v.dir === 'DESC' ? ALL.slice(-2) : ALL.slice(start, start + 4);
+      const q = JSON.parse(String(init!.body)), v = q.variables;
+      if (q.query.includes('issues(')) return Response.json({ data: { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [
+        { number: 7, state: 'OPEN', title: 'データの土台', body: '', createdAt: '2026-11-21T00:00:00Z', updatedAt: '2026-11-21T00:00:00Z', closedAt: null, parent: null },
+        { number: 8, state: 'OPEN', title: 'βモデル 段階4', body: '', createdAt: '2026-11-11T00:00:00Z', updatedAt: '2026-11-15T00:00:00Z', closedAt: null, parent: null },
+        { number: 9, state: 'CLOSED', title: '満月の物語：はじめ', body: '', createdAt: '2026-11-20T00:00:00Z', updatedAt: '2026-11-21T00:00:00Z', closedAt: '2026-11-21T00:00:00Z', parent: { number: 7 } },
+      ] } } } });
+      const start = v.after ? Number(v.after) : 0, part = v.dir === 'DESC' ? ALL.slice(-2).map(p => ({ ...p, updatedAt: '2026-11-01T00:00:00Z' })) : ALL.slice(start, start + 4);
       return Response.json({ data: { repository: { pullRequests: { pageInfo: { hasNextPage: v.dir === 'ASC' && start + 4 < ALL.length, endCursor: String(start + 4) }, nodes: part } } } });
     }
-    if (url.pathname.endsWith('/issues')) return Response.json([
-      { number: 7, state: 'open', title: 'データの土台', body: '', created_at: '2026-11-21T00:00:00Z', updated_at: '2026-11-21T00:00:00Z', closed_at: null },
-      { number: 8, state: 'open', title: 'βモデル 段階4', body: '', created_at: '2026-11-11T00:00:00Z', updated_at: '2026-11-15T00:00:00Z', closed_at: null },
-      { number: 9, state: 'closed', title: '満月の物語：はじめ', body: '', created_at: '2026-11-20T00:00:00Z', updated_at: '2026-11-21T00:00:00Z', closed_at: '2026-11-21T00:00:00Z' },
-      { number: 10, state: 'open', title: 'PR', pull_request: {}, body: '', created_at: '', updated_at: '', closed_at: null },
-    ]);
     return new Response('nf', { status: 404 });
   }) as typeof fetch;
   try {
     const a = await syncMap(env, 'o/r', 1);
-    assert.deepEqual(a, { prs: 4, backfillDone: false, issues: 3 });
+    assert.deepEqual(a, { prs: 4, backfillDone: false, issues: 3, issuesMore: false });
     const b = await syncMap(env, 'o/r', 4);
     assert.equal(b.backfillDone, true);
-    assert.equal(gql, 4); // 1回目：さかのぼり1＋新しい1、2回目：さかのぼり1（残り2件）＋新しい1
+    assert.equal(gql, 6); // 1回目：さかのぼり1＋新しい1＋Issue 1、2回目：さかのぼり1（残り2件）＋新しい1（前回より古いものに届いたので1ページ）＋Issue 1
   } finally { globalThis.fetch = real; }
 
   const v = await mapView(env, 'o/r', 21, '2026-11-27') as any;
@@ -95,7 +94,7 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
   const real2 = globalThis.fetch; globalThis.fetch = (async () => { throw new Error('読み直さないはず'); }) as typeof fetch;
   try {
     assert.match(await mapAction(env, 'map', { repo: 'o/r' }), /満月の物語（絵本）（id=story）：/);
-    assert.match(await mapAction(env, 'issue', { repo: 'o/r', n: '#7' }), /つながり（0）/);
+    assert.match(await mapAction(env, 'issue', { repo: 'o/r', n: '#7' }), /つながり（1）\n- \[親子（子）\] Issue #9[\s\S]*根拠：GitHub の親子：#9 がサブ Issue/);
     assert.match(await mapAction(env, 'feature', { repo: 'o/r', id: 'feel' }), /#8 βモデル 段階4.*［古くなっている候補］/);
     await assert.rejects(mapAction(env, 'issue', { repo: 'o/r', n: 99 }), /#99 は取り込まれていません/);
     assert.match(await mapAction(env, 'map', { repo: 'o/r' }), /毎日の見直し：今日はまだ（前回 なし）/);
@@ -129,16 +128,17 @@ test('Issue のつながり：閉じた・明示（PR と Issue の本文）・�
   ]);
   const k = (n: number) => m.get(n)!.map(l => `${l.kind}:${l.type}${l.n}`);
   assert.deepEqual(k(11), ['ref:issue13', 'ref:pr17', 'candidate:pr30']);   // #31 はほかの Issue を指すので候補にしない・#40 は開く前
-  assert.deepEqual(k(12), ['child:issue13', 'closes:pr20']);
-  assert.deepEqual(k(13), ['parent:issue12', 'ref:issue11', 'ref:pr31']);
+  assert.deepEqual(k(12), ['to:issue13', 'closes:pr20']);
+  assert.deepEqual(k(13), ['from:issue12', 'ref:issue11', 'ref:pr31']);
   assert.match(m.get(11)![1].evidence[0], /Issue #11 の本文：作業：PR-1 文章（#17）/);
   assert.match(m.get(11)!.at(-1)!.evidence[0], /同じ機能のファイルを変えた（src\/ui\/MoonStory.tsx）/);
 });
 test('PR の説明から申告を読む（見出しの名前で。なしは空）', () => {
   const r = parseReport('変えたこと\n\n## 確かめた決まり\n- `docs/moon.md`「動き」\n- `docs/design.md`「2.1 文字」\n## 決まりになく、自分で判断した所\n- 折る位置を空白にした\n## 足りなかった決まり\n- なし\n');
-  assert.deepEqual(r, { read: ['`docs/moon.md`「動き」', '`docs/design.md`「2.1 文字」'], own: ['折る位置を空白にした'], lack: [] });
+  assert.deepEqual(r, { read: ['`docs/moon.md`「動き」', '`docs/design.md`「2.1 文字」'], own: ['折る位置を空白にした'], lack: [], found: ['read', 'own', 'lack'], complete: true });
   assert.equal(parseReport('ふつうの説明だけ'), null);
-  assert.deepEqual(parseReport('**確かめた決まり**\n- docs/a.md\n')!.read, ['docs/a.md']);
+  const one = parseReport('**確かめた決まり**\n- docs/a.md\n')!;
+  assert.deepEqual([one.read, one.complete], [['docs/a.md'], false]); // 見出し1つだけでは、守れたと数えない
 });
 
 test('書き方の守り具合：題の頭・Issue の番号・申告、Issue の「機能：」「閉じる条件：」', async () => {

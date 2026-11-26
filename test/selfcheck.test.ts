@@ -47,3 +47,17 @@ test('タグの自己チェック：3つまで・新しい話題は似たもの�
   const old = checkPr(cat, { title: '地図の画面：x', body: '関連：なし\nタグ：クラスター' + REPORT, files: [] }, issues, new Set(['クラスター']));
   assert.equal(old.some(x => x.what.includes('新しい話題')), false);
 });
+
+test('申告は3つの見出しがそろって合格（1つだけなら、無い見出しを出す）', () => {
+  const r = checkPr(cat, { title: '地図の画面：x', body: '関連：なし\n## 確かめた決まり\n- なし', files: [] }, issues);
+  const x = r.find(i => i.what.startsWith('申告'))!;
+  assert.deepEqual([x.ok, x.what], [false, '申告の3つの見出し（無い：決まりになく、自分で判断した所・足りなかった決まり）']);
+});
+
+test('作品ごとの話題は機能名に吸い込まれない（レビューの指摘：タグ：コールドムーン、ビーバームーン、絵本）', async () => {
+  const { splitTags, topicsOf } = await import('../src/workmap.ts');
+  const wn = CATALOGS['Watanabe-Masao/weather-note-cf'];
+  assert.deepEqual(splitTags(wn, ['コールドムーン', 'ビーバームーン', '絵本']), { features: ['story'], topics: ['コールドムーン', 'ビーバームーン'] });
+  // タグが無くても、題に作品名があれば話題に入る（#411）
+  assert.deepEqual(topicsOf(wn, '満月の物語とイベントの見出し：コールドムーンの絵本と残り', ''), ['コールドムーン']);
+});
