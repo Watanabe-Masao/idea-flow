@@ -200,6 +200,7 @@ export function parseReport(body: string) {
     const head = line.match(/^(#{1,6}\s+|\*\*)(.+?)(\*\*)?[:：]?$/);
     if (head) { const k = KEYS.find(([, re]) => re.test(head[2])); cur = k ? k[0] : null; if (k) found = true; continue; }
     if (!cur) continue;
+    if (/^([-*_])\1{2,}$/.test(line)) { cur = null; continue; } // 区切り線（---）で見出しの中身は終わり
     const it = line.match(/^[-*・]\s*(.+)$/);
     if (it && !/^(なし|特になし|無し)[。．]?$/.test(it[1].trim())) sec[cur].push(it[1].trim());
   }
@@ -215,7 +216,8 @@ export function writingCheck(cat: Catalog, prs: Pr[], issues: { number: number; 
   const names = new Set(cat.features.flatMap(f => [f.name, f.name.replace(/（.*）/, ''), ...f.aliases]));
   const titled = (t: string) => { const h = t.split(/[：:]/)[0].trim(); return h !== t.trim() && (names.has(h) || [...names].some(n => n && h.startsWith(n))); };
   const linkedPrs = new Set([...links.values()].flatMap(L => L.filter(l => l.type === 'pr' && l.kind !== 'candidate').map(l => l.n)));
-  const P = prs.map(p => ({ n: p.number, t: p.title, url: p.url, day: jstDay(p.merged_at), miss: [!titled(p.title) && '題の頭に機能名', !linkedPrs.has(p.number) && '関係する Issue の番号', !parseReport(p.body) && '申告の3つの見出し'].filter(Boolean) as string[] }));
+  const noneSaid = (b: string) => /関連\s*[:：]\s*なし/.test(b); // 「関連：なし」と書いたものは守れている（書き忘れと分ける）
+  const P = prs.map(p => ({ n: p.number, t: p.title, url: p.url, day: jstDay(p.merged_at), miss: [!titled(p.title) && '題の頭に機能名', !linkedPrs.has(p.number) && !noneSaid(p.body) && '関係する Issue の番号', !parseReport(p.body) && '申告の3つの見出し'].filter(Boolean) as string[] }));
   const I = issues.map(i => ({ n: i.number, t: i.title, day: i.created ? jstDay(i.created) : '', miss: [!/^\s*(?:[-*]\s*)?\**機能\**\s*[:：]/m.test(i.body) && '本文の「機能：」', !/閉じる条件\s*[:：]/.test(i.body) && '本文の「閉じる条件：」'].filter(Boolean) as string[] }));
   const cnt = (xs: { miss: string[] }[], m: string) => xs.filter(x => !x.miss.includes(m)).length;
   return {

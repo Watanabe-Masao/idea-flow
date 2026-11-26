@@ -151,7 +151,7 @@ function issueView(d, s) {
 // クラスター：機能ごとに、その機能の Issue（左）と、つながる PR（右）を線で。線の種類＝つながりの種類
 const LK = { closes: ['これで閉じた', '#2fae69', ''], ref: ['番号で参照', 'var(--mute)', ''], parent: ['引き継ぎ', '#5b7fd6', ''], candidate: ['推測（候補）', '#9a6fc0', '5 4'], catalog: ['機能の割り当て', 'var(--line)', '1 4'] };
 function clusterView(d, s) {
-  const per = d.features.map(f => ({ f, iss: d.issues.filter(i => inC(i)) })).filter(x => x.iss.length)
+  const per = d.features.map(f => ({ f, iss: d.issues.filter(i => i.features.includes(f.id)) })).filter(x => x.iss.length)
     .sort((a, b) => b.iss.filter(i => i.open).length - a.iss.filter(i => i.open).length || b.iss.length - a.iss.length);
   // 話題（機能ではないタグ）も入り口にする。id は「t:話題」。その話題の Issue と、その話題を付けた PR
   for (const t of d.topics || []) per.push({ f: { id: 't:' + t.name, name: '話題：' + t.name, state: 1, topic: t }, iss: d.issues.filter(i => (i.topics || []).includes(t.name)) });
