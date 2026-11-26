@@ -104,3 +104,18 @@ test('票の割合としきい値、手本との近さの下限で決める', ()
   assert.equal(decideVote([{ id: 'A', score: 1, sim: 0.3 }], 0.75, 0.5, 0.5).level, 'none');
   assert.equal(decideVote([], 0.75, 0.5, 0.5).level, 'none');
 });
+
+test('perLabel：手本の多いラベルが票を集めすぎない', () => {
+  const ex = [
+    ...[0.1, 0.12, 0.14, 0.16, 0.18].map((y, i) => ({ vec: v(1, y), label: 'BIG', heading: null, key: 'b' + i })),
+    { vec: v(1, 0.2), label: 'S', heading: null, key: 's1' },
+    { vec: v(1, 0.22), label: 'S', heading: null, key: 's2' },
+  ];
+  const q = v(1, 0.17);
+  const share = (r: { id: string; score: number }[], id: string) => r.find(x => x.id === id)?.score ?? 0;
+  const free = knnVote(q, null, ex, { k: 4 });
+  const capped = knnVote(q, null, ex, { k: 4, perLabel: 2 });
+  // 上限なしでは BIG が4票中3票、上限2件なら S も2票ぶん数えられる
+  assert.ok(share(capped, 'S') > share(free, 'S') + 0.15);
+  assert.ok(share(free, 'BIG') > 0.7);
+});

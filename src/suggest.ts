@@ -17,6 +17,12 @@ export async function loadSettings(env: Env): Promise<Settings> {
 }
 
 const CLOSED_FOR_MATCH = new Set(['duplicate']);
+/** 課題の多数決で、1つの課題から数える手本の上限（手本の多い課題に票が偏らないように） */
+const ISSUE_PER_LABEL = 2;
+/** 自動にしてよい当たりの下限と、そのとき必要な件数。届かなければ自動はなし（確認待ちだけ） */
+const AUTO_PRECISION = 0.95, AUTO_MIN_COVERED = 5;
+/** 自動なし を表すしきい値（票の割合は 1 を超えない） */
+export const AUTO_OFF = 1.01;
 
 /** コミットに書かれた番号から、課題を確定で引く（'#369' → 題名が '#369 …' の課題、'WAT-9' → その課題） */
 export function numberLinks(commits: CommitRow[], issues: IssueRow[]): Map<string, string> {
@@ -145,7 +151,7 @@ export async function computeSuggestions(env: Env) {
     if (!v || known.has(c.sha)) continue;
     if (decided.has(`commit_issue|${c.sha}`) || decided.has(`commit_theme|${c.sha}`)) continue;
     const h = headingOf(c.message);
-    const ti = knnVote(v, h, issueEx);
+    const ti = knnVote(v, h, issueEx, { perLabel: ISSUE_PER_LABEL });
     const di = decideVote(ti, st.issue_auto, st.issue_ask, st.min_sim);
     if (di.level !== 'none') {
       nIssue++;
@@ -237,7 +243,7 @@ export async function evaluate(env: Env) {
     const grp = c.pr_number != null ? String(c.pr_number) : null;
     const skip = (e: Example) => e.key === sha || (grp != null && e.group === grp);
     const h = headingOf(c.message);
-    const ti = knnVote(v, h, issueEx, { skip })[0];
+    const ti = knnVote(v, h, issueEx, { skip, perLabel: ISSUE_PER_LABEL })[0];
     if (ti) {
       const ok = ti.id === truth, nr = near(ti.id, truth);
       issuePairs.push({ score: ti.sim < st.min_sim ? 0 : ti.score, correct: ok, near: nr });
@@ -254,14 +260,17 @@ export async function evaluate(env: Env) {
     const kept = p.filter(x => x.score >= r.threshold);
     return { ...r, nearPrecision: kept.length ? kept.filter(x => x.near).length / kept.length : 0 };
   });
-  const pick = (rows: ReturnType<typeof sw>, minPrecision: number) => rows.find(r => r.precision >= minPrecision && r.covered >= 3)?.threshold ?? null;
+  const pick = (rows: ReturnType<typeof sw>, minPrecision: number, minCovered: number) => rows.find(r => r.precision >= minPrecision && r.covered >= minCovered)?.threshold ?? null;
+  // 自動：当たりが95%以上になる最小のしきい値（件数が少なすぎるものは採らない）
+  const pickAuto = (rows: ReturnType<typeof sw>) => pick(rows, AUTO_PRECISION, AUTO_MIN_COVERED);
   const issueSweep = sw(issuePairs), themeSweep = sw(themePairs);
   return {
     groundTruth: issuePairs.length,
-    method: '手本のコミットとの多数決（見出しが同じなら加点）',
+    method: '手本のコミットとの多数決（見出しが同じなら加点、課題は1つにつき近い2件まで）',
+    autoOff: AUTO_OFF,
     oldIssueTop1: oldN ? oldIssueOk / oldN : 0,
-    issue: { top1Accuracy: acc(issuePairs, x => x.correct), nearAccuracy: acc(issuePairs, x => x.near), sweep: issueSweep, suggestedAuto: pick(issueSweep, 0.9), suggestedAsk: pick(issueSweep, 0.6) },
-    theme: { top1Accuracy: acc(themePairs, x => x.correct), nearAccuracy: acc(themePairs, x => x.near), sweep: themeSweep, suggestedAuto: pick(themeSweep, 0.9), suggestedAsk: pick(themeSweep, 0.6) },
+    issue: { top1Accuracy: acc(issuePairs, x => x.correct), nearAccuracy: acc(issuePairs, x => x.near), sweep: issueSweep, suggestedAuto: pickAuto(issueSweep), suggestedAsk: pick(issueSweep, 0.6, 3) },
+    theme: { top1Accuracy: acc(themePairs, x => x.correct), nearAccuracy: acc(themePairs, x => x.near), sweep: themeSweep, suggestedAuto: pickAuto(themeSweep), suggestedAsk: pick(themeSweep, 0.6, 3) },
     misses,
     note: '1件ずつ、自分と同じPRのコミットを手本から外して当てています。正解が少ないので、しきい値は目安です。',
   };

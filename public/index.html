@@ -40,7 +40,7 @@ table{border-collapse:collapse;font-size:13px;width:100%}td,th{padding:4px 6px;b
 <div class="legend"><span>● 確定・承認済み</span><span style="color:var(--mute)">● 自動（近さ）</span><span>○ 確認待ちだけ</span><span><span style="color:var(--red)">•</span> 確認待ちを含む</span><span>点の数字＝コミット数</span><span>右端：▶進行中 ○未着手 ✓完了 ×中止 ＝重複</span></div></div>
 <div class="card" id="detail"><p class="sub">行をタップすると課題とつながり、点をタップするとコミットが出ます。</p></div></section>
 <section id="v-pending" hidden><div class="card" id="plist"></div></section>
-<section id="v-eval" hidden><div class="card" id="elist"><p class="sub">番号で確定しているコミットを正解として、手本のコミットとの多数決でどこまで当てられるかを測ります。</p><div class="row"><button class="btn p" id="runEval">答え合わせをする</button></div></div></section>
+<section id="v-eval" hidden><div class="card" id="sets"></div><div class="card" id="elist"><p class="sub">番号で確定しているコミットを正解として、手本のコミットとの多数決でどこまで当てられるかを測ります。</p><div class="row"><button class="btn p" id="runEval">答え合わせをする</button></div></div></section>
 </div>
 <script>
 {
@@ -143,13 +143,19 @@ function pct(x){return Math.round(x*100)+'%'}
 async function runEval(){say('答え合わせ中…');const e=await api('/api/eval');say('');
  const tbl=(s,nr)=>`<div class="scroll"><table><tr><th>確からしさ</th><th>件数</th><th>カバー</th><th>当たり</th>${nr?'<th>ほぼ</th>':''}</tr>${s.map(r=>`<tr><td>${r.threshold.toFixed(2)}</td><td>${r.covered}</td><td>${pct(r.coverage)}</td><td>${pct(r.precision)}</td>${nr?`<td>${pct(r.nearPrecision)}</td>`:''}</tr>`).join('')}</table></div>`;
  $('#elist').innerHTML=`<h2>答え合わせ（正解 ${e.groundTruth}件）</h2><p class="sub">方式：${esc(e.method)}。${esc(e.note)}</p>
- <h3>課題を当てる：1位が正解 ${pct(e.issue.top1Accuracy)}・ほぼ正解 ${pct(e.issue.nearAccuracy)}</h3><p class="sub">前の方式（課題の文との近さ）は ${pct(e.oldIssueTop1)}。「ほぼ」は親子・兄弟・関係のある課題に当たったもの。目安：自動 ${e.issue.suggestedAuto??'—'}・確認待ち ${e.issue.suggestedAsk??'—'}</p>${tbl(e.issue.sweep,1)}
- <h3>テーマを当てる：1位が正解 ${pct(e.theme.top1Accuracy)}</h3><p class="sub">目安：自動 ${e.theme.suggestedAuto??'—'}・確認待ち ${e.theme.suggestedAsk??'—'}</p>${tbl(e.theme.sweep,0)}
- <div class="row"><button class="btn p" id="applyEval">この目安をしきい値にする</button></div>
+ <h3>課題を当てる：1位が正解 ${pct(e.issue.top1Accuracy)}・ほぼ正解 ${pct(e.issue.nearAccuracy)}</h3><p class="sub">前の方式（課題の文との近さ）は ${pct(e.oldIssueTop1)}。「ほぼ」は親子・兄弟・関係のある課題に当たったもの。目安：自動 ${e.issue.suggestedAuto??'なし'}・確認待ち ${e.issue.suggestedAsk??'—'}</p>${tbl(e.issue.sweep,1)}
+ <h3>テーマを当てる：1位が正解 ${pct(e.theme.top1Accuracy)}</h3><p class="sub">目安：自動 ${e.theme.suggestedAuto??'なし'}・確認待ち ${e.theme.suggestedAsk??'—'}</p>${tbl(e.theme.sweep,0)}
+ <p class="sub">自動にするのは、当たりが95%以上になるところだけ（届かなければ自動はなし＝確認待ちだけ）。</p><div class="row"><button class="btn p" id="applyEval">この目安をしきい値にする</button></div>
  <h3>外れた例</h3><ul class="items">${e.misses.map(m=>`<li>${esc(m.message)}<small>正解 ${esc(m.truth)}・推定 ${esc(m.guess)}（${m.score}）${m.near?'・ほぼ正解':''}</small></li>`).join('')||'<li>ありません</li>'}</ul>`;
- $('#applyEval').onclick=async()=>{const b={};if(e.issue.suggestedAuto)b.issue_auto=e.issue.suggestedAuto;if(e.issue.suggestedAsk)b.issue_ask=e.issue.suggestedAsk;if(e.theme.suggestedAuto)b.theme_auto=e.theme.suggestedAuto;if(e.theme.suggestedAsk)b.theme_ask=e.theme.suggestedAsk;
-  await api('/api/settings',{method:'POST',body:JSON.stringify(b)});say('しきい値を保存しました。提案を計算し直します…');await api('/api/suggest',{method:'POST'});await load();say('計算し直しました')}}
-function view(){document.querySelectorAll('.tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===VIEW));['map','pending','eval'].forEach(v=>$('#v-'+v).hidden=v!==VIEW);if(VIEW==='map')draw();if(VIEW==='pending')plist()}
+ $('#applyEval').onclick=async()=>{const b={issue_auto:e.issue.suggestedAuto??e.autoOff,theme_auto:e.theme.suggestedAuto??e.autoOff};if(e.issue.suggestedAsk)b.issue_ask=e.issue.suggestedAsk;if(e.theme.suggestedAsk)b.theme_ask=e.theme.suggestedAsk;
+  await saveSets(b)}}
+const SETS=[['issue_auto','課題：自動'],['issue_ask','課題：確認待ち'],['theme_auto','テーマ：自動'],['theme_ask','テーマ：確認待ち'],['min_sim','手本との近さの下限']];
+async function sets(){const st=await api('/api/settings');
+ $('#sets').innerHTML=`<h2>しきい値</h2><p class="sub">確からしさ（票の割合 0〜1）がこれ以上なら自動・確認待ち。自動を 1 より大きくすると「自動なし」。</p>
+ <div style="display:grid;grid-template-columns:1fr 110px;gap:6px 10px;align-items:center;margin-top:8px">${SETS.map(([k,l])=>`<label for="s-${k}" style="font-size:14px">${l}${k.endsWith('auto')&&st[k]>1?' <small style="display:inline">（なし）</small>':''}</label><input id="s-${k}" type="number" inputmode="decimal" step="0.05" min="0" max="1.01" value="${st[k]}">`).join('')}</div>
+ <div class="row"><button class="btn p" id="saveSets">保存して提案を作り直す</button></div>`}
+async function saveSets(b){await api('/api/settings',{method:'POST',body:JSON.stringify(b)});say('しきい値を保存しました。提案を計算し直します…');const r=await api('/api/suggest',{method:'POST'});await load();await sets();say(`計算し直しました（課題 ${r.commitIssue}・テーマ ${r.commitTheme}・新しい塊 ${r.newClusters}）`)}
+function view(){document.querySelectorAll('.tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===VIEW));['map','pending','eval'].forEach(v=>$('#v-'+v).hidden=v!==VIEW);if(VIEW==='map')draw();if(VIEW==='pending')plist();if(VIEW==='eval')sets().catch(e=>say(e.message))}
 function all(){draw();detail();plist()}
 async function load(){try{M=await api('/api/map');const pd=await api('/api/pending');PENDING=pd.items;PTOTAL=pd.total;PDONE=0;$('#gate').hidden=true;index();all();if(!M.commits.length)say('まだデータがありません。「取り込み直す」を押してください。')}catch(e){say(e.message)}}
 fig.addEventListener('click',e=>{if(e.target.closest('#pop'))return;const dot=e.target.closest('[data-dot]');
@@ -164,6 +170,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.id==='sync'){b.disabled=true;say('Linear と GitHub から取り込み、埋め込みと提案を計算しています…');const r=await api('/api/sync',{method:'POST'});
   say(`取り込み：課題 ${r.linear.issues}・コミット ${r.github.commits}／埋め込み ${r.embeddings.embedded}件／提案：課題 ${r.suggestions.commitIssue}・テーマ ${r.suggestions.commitTheme}・新しい塊 ${r.suggestions.newClusters}`);b.disabled=false;await load();return}
  if(b.id==='runEval'){await runEval();return}
+ if(b.id==='saveSets'){const o={};for(const [k] of SETS){const v=parseFloat($('#s-'+k).value);if(Number.isFinite(v))o[k]=v}b.disabled=true;await saveSets(o);return}
  if(b.dataset.dec){b.disabled=true;const body={id:b.dataset.id,decision:b.dataset.dec};if(b.dataset.target)body.target=b.dataset.target;await api('/api/decide',{method:'POST',body:JSON.stringify(body)});closePop();
   if(VIEW==='pending'){settle(b.dataset.id);return}await load();say(b.dataset.dec==='accept'?'承認しました':'却下しました');return}
  if(b.dataset.skip){PSKIP.add(b.dataset.skip);plist();return}
