@@ -115,6 +115,10 @@ export function sectionsOf(src: string): { heading: string; line: number; md: st
 /** 一時的な決まりらしい言葉。ドメインの言葉（気象の「暫定値」など）にも当たるので、候補として人が確かめる */
 export const TEMP_WORDS = /今回|当面|一旦|いったん|暫定|とりあえず|しばらく|まずは|今は|仮に|あとで|TODO|FIXME/;
 export const NEG_WORDS = /ない|しない|使わない|禁止|やめる|不要|避ける|書かない|入れない/;
+/** してもしなくてもよい（任意）。「かまわない」「なくてよい」は「ない」を含むので、否定より先に見る */
+export const OPT_WORDS = /なくて(も)?(よい|良い|いい|かまわない|構わない)|ても(よい|良い|いい|かまわない|構わない)|任意|しなくてよい|省いてよい/;
+/** 決まりの言い方：must（する）／not（しない）／opt（してもしなくてもよい） */
+export const modalOf = (t: string): 'must' | 'not' | 'opt' => OPT_WORDS.test(t) ? 'opt' : NEG_WORDS.test(t) ? 'not' : 'must';
 
 /** 決まりの中の「言葉」（識別子・かぎかっこの言葉）。同じ言葉が別の文書で説明されていないかを見る */
 export function termsOf(text: string): Set<string> {

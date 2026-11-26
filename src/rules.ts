@@ -1,7 +1,7 @@
 // 決まりの見える化（#8）。リポジトリから決まりの文書を読み、単位に分け、意味の近さで問題を探す。
 // GitHub には書き込まない。人が「問題ではない」と決めたものは rule_dismissed に残る。
 import type { Env } from './types.ts';
-import { classify, defaultPick, externalByLicense, frontmatter, parseRules, sectionsOf, resolveRef, termsOf, TEMP_WORDS, NEG_WORDS } from './rules-parse.ts';
+import { classify, defaultPick, externalByLicense, frontmatter, parseRules, sectionsOf, resolveRef, termsOf, TEMP_WORDS, modalOf } from './rules-parse.ts';
 import { audit, depsOf, type AuditHit } from './audit.ts';
 import { embedMany, loadVectors, upsertEmbeddings } from './embed.ts';
 import { dot, type Vec } from './vec.ts';
@@ -109,7 +109,7 @@ type Item = { id: string; doc: string; heading: string; text: string; kind: stri
 type Doc = { id: string; repo: string; path: string; kind: string; applies: string; scope: string; title: string | null; description: string | null; refs: string; external: number; external_by: string | null };
 
 /** 問題の探し方の版。探し方を変えたら上げる（古い結果のままなら、画面で取り込み直しを促す） */
-export const ANALYZE_VERSION = '5'; // 5：重複にする前に否定を確かめる（#46）
+export const ANALYZE_VERSION = '6'; // 5：重複にする前に否定を確かめる（#46）。6：「〜しなくてよい」（任意）も分ける
 
 /** 問題を探し直す（全部のリポジトリをまとめて。別のリポジトリどうしの重複も見える） */
 export async function analyze(env: Env) {
@@ -126,7 +126,7 @@ export async function analyze(env: Env) {
   for (const it of items) { const m = it.text.match(TEMP_WORDS); if (m && it.kind !== 'desc') add('temporary', it.id, null, null, { word: m[0] }); }
 
   // 重複と食い違いの候補：別の文書どうしで意味が近いもの（短すぎるものは除く）
-  const cand = items.filter(i => i.kind !== 'desc' && i.text.length >= 12 && vecs.has(i.id)).map(i => ({ i, v: vecs.get(i.id)! as Vec, neg: NEG_WORDS.test(i.text), terms: termsOf(i.text) }));
+  const cand = items.filter(i => i.kind !== 'desc' && i.text.length >= 12 && vecs.has(i.id)).map(i => ({ i, v: vecs.get(i.id)! as Vec, neg: modalOf(i.text), terms: termsOf(i.text) }));
   const pairs: { a: typeof cand[number]; b: typeof cand[number]; s: number }[] = [];
   for (let x = 0; x < cand.length; x++) for (let y = x + 1; y < cand.length; y++) {
     if (cand[x].i.doc === cand[y].i.doc) continue;
@@ -136,8 +136,8 @@ export async function analyze(env: Env) {
   pairs.sort((p, q) => q.s - p.s);
   let nd = 0, nc = 0, nf = 0;
   for (const p of pairs) {
-    // とても近くても、片方だけが否定（〜しない・使わない など）なら、同じことではなく逆のことを言っている → 食い違いの候補へ
-    if (p.s >= dupT && p.a.neg !== p.b.neg) { if (nc < 80) { add('conflict', p.a.i.id, p.b.i.id, p.s, { why: 'neg' }); nc++; } continue; }
+    // とても近くても、言い方（する／しない／してもしなくてもよい）が違えば、同じことではない → 食い違いの候補（要確認）へ
+    if (p.s >= dupT && p.a.neg !== p.b.neg) { if (nc < 80) { add('conflict', p.a.i.id, p.b.i.id, p.s, { why: 'modal', modal: [p.a.neg, p.b.neg] }); nc++; } continue; }
     if (p.s >= dupT) { if (nd < 80) { add('duplicate', p.a.i.id, p.b.i.id, p.s, {}); nd++; } continue; }
     // 同じ言葉を別の文書で説明している → 定義が分かれている（食い違いより先に見る）
     const shared = [...p.a.terms].filter(t => p.b.terms.has(t));
