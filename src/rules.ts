@@ -1,7 +1,8 @@
 // 決まりの見える化（#8）。リポジトリから決まりの文書を読み、単位に分け、意味の近さで問題を探す。
 // GitHub には書き込まない。人が「問題ではない」と決めたものは rule_dismissed に残る。
 import type { Env } from './types.ts';
-import { classify, defaultPick, externalByLicense, parseRules, resolveRef, termsOf, TEMP_WORDS, NEG_WORDS } from './rules-parse.ts';
+import { classify, defaultPick, externalByLicense, frontmatter, parseRules, resolveRef, termsOf, TEMP_WORDS, NEG_WORDS } from './rules-parse.ts';
+import { audit, depsOf, type AuditHit } from './audit.ts';
 import { embedMany, loadVectors, upsertEmbeddings } from './embed.ts';
 import { dot, type Vec } from './vec.ts';
 import { bulkInsert, nowIso, sha256 } from './util.ts';
@@ -21,6 +22,28 @@ async function gh<T>(env: Env, path: string, raw = false): Promise<T> {
   return (raw ? await res.text() : await res.json()) as T;
 }
 
+/**
+ * たくさんのファイルを少ない回数で読む。GitHub の GraphQL なら1回で約40ファイル読める
+ * （Workers は1回の処理で外へ出せる数に限りがあるので、1ファイル1回の読み方を避ける）。
+ * トークンが無いときや失敗したときは null（呼ぶ側が1つずつ読む）。
+ */
+async function readMany(env: Env, repo: string, branch: string, paths: string[]): Promise<Map<string, string> | null> {
+  if (!env.GITHUB_TOKEN || !paths.length) return null;
+  const [owner, name] = repo.split('/');
+  const out = new Map<string, string>();
+  for (let i = 0; i < paths.length; i += 40) {
+    const part = paths.slice(i, i + 40);
+    const q = `query($o:String!,$n:String!){repository(owner:$o,name:$n){${part.map((p, k) => `f${k}:object(expression:${JSON.stringify(`${branch}:${p}`)}){...on Blob{text}}`).join(' ')}}}`;
+    const res = await fetch('https://api.github.com/graphql', { method: 'POST', headers: { ...ghHeaders(env), 'content-type': 'application/json' }, body: JSON.stringify({ query: q, variables: { o: owner, n: name } }) });
+    if (!res.ok) return null;
+    const j = await res.json() as { data?: { repository?: Record<string, { text: string | null } | null> }; errors?: unknown };
+    const r = j.data?.repository;
+    if (!r) return null;
+    part.forEach((p, k) => { const t = r[`f${k}`]?.text; if (typeof t === 'string') out.set(p, t); });
+  }
+  return out;
+}
+
 type Source = { repo: string; branch: string; files: string[]; synced_at: string | null };
 export async function sources(env: Env): Promise<Source[]> {
   const rows = (await env.DB.prepare('SELECT * FROM rule_sources ORDER BY repo').all<{ repo: string; branch: string; files: string; synced_at: string | null }>()).results;
@@ -36,7 +59,7 @@ export async function listFiles(env: Env, repo: string) {
   const all = tree.tree.filter(t => t.type === 'blob').map(t => t.path);
   const md = all.filter(p => /\.md$/i.test(p)).sort();
   const chosen = src && src.files.length ? new Set(src.files) : new Set(md.filter(defaultPick));
-  return { repo, branch, truncated: tree.truncated, files: md.map(p => ({ path: p, picked: chosen.has(p), external: externalByLicense(all, p), ...classify(p) })) };
+  return { repo, branch, truncated: tree.truncated, all, files: md.map(p => ({ path: p, picked: chosen.has(p), external: externalByLicense(all, p), ...classify(p) })) };
 }
 
 export async function saveSource(env: Env, repo: string, files: string[], branch = 'main') {
@@ -55,8 +78,13 @@ export async function syncRules(env: Env, repo: string) {
   const extHuman = new Map((await env.DB.prepare('SELECT path, external FROM rule_external WHERE repo = ?').bind(repo).all<{ path: string; external: number }>()).results.map(r => [r.path, !!r.external]));
   const now = nowIso();
   const docRows: unknown[][] = [], itemRows: unknown[][] = [];
+  // .md を全部（と package.json）まとめて読む。読めなければ、選んだものだけ1つずつ読む
+  const mdAll = info.files.map(f => f.path);
+  const bulk = await readMany(env, repo, info.branch, [...mdAll, ...(info.all.includes('package.json') ? ['package.json'] : [])]);
+  const texts = bulk ?? new Map<string, string>();
   for (const path of picked) {
-    const src = await gh<string>(env, `/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(info.branch)}`, true);
+    const src = texts.get(path) ?? await gh<string>(env, `/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(info.branch)}`, true);
+    texts.set(path, src);
     const c = classify(path);
     const p = parseRules(src, c.kind);
     const id = `${repo}|${path}`;
@@ -72,10 +100,40 @@ export async function syncRules(env: Env, repo: string) {
     env.DB.prepare('UPDATE rule_sources SET synced_at = ?, files = ? WHERE repo = ?').bind(now, JSON.stringify(picked), repo),
   ]);
   await env.DB.prepare('INSERT OR IGNORE INTO rule_sources (repo, branch, files, synced_at) VALUES (?, ?, ?, ?)').bind(repo, info.branch, JSON.stringify(picked), now).run();
+  const auditN = await runAudit(env, repo, info.branch, info.all, texts, now, picked);
   const items = (await env.DB.prepare('SELECT id, heading, text FROM rule_items').all<{ id: string; heading: string; text: string }>()).results;
   const embedded = await upsertEmbeddings(env, items.map(i => ({ kind: 'rule' as const, ref: i.id, text: ruleText(i) })));
   const findings = await analyze(env);
-  return { repo, docs: docRows.length, items: itemRows.length, embedded, findings };
+  return { repo, docs: docRows.length, items: itemRows.length, embedded, findings, audit: auditN, readAll: !!bulk };
+}
+
+/**
+ * 機能していない・意味がなさそうな文書の候補を調べて残す。
+ * 読めた .md だけで調べる（トークンが無いと、選んだ文書だけになる）。
+ * もう無いファイルは、最後に触ったコミット（消したコミット）も調べる（多くて8件）。
+ */
+async function runAudit(env: Env, repo: string, branch: string, all: string[], texts: Map<string, string>, now: string, picked: string[]) {
+  // 決まりとして選んだ文書は「入口からたどれない」で見るので、ここでは数えない（同じことを2回言わない）
+  const placed = new Set(picked);
+  for (const r of (await env.DB.prepare('SELECT d.path FROM scope_docs d JOIN scopes s ON s.id = d.scope_id WHERE s.repo = ?').bind(repo).all<{ path: string }>()).results) placed.add(r.path);
+  const descriptions = new Map<string, string>();
+  for (const [p, t] of texts) if (classify(p).kind === 'skill') { const d = frontmatter(t).meta.description; if (d) descriptions.set(p, d); }
+  const md = new Map([...texts].filter(([p]) => /\.md$/i.test(p)));
+  const hits: AuditHit[] = audit({ all, texts: md, deps: depsOf(texts.get('package.json')), placed, descriptions });
+  let looked = 0;
+  for (const h of hits) if (h.kind === 'dead_ref') for (const r of h.detail.refs as { ref: string; gone?: unknown }[]) {
+    if (looked >= 8) break;
+    looked++;
+    try {
+      const cs = await gh<{ sha: string; commit: { message: string; committer: { date: string } } }[]>(env, `/repos/${repo}/commits?path=${encodeURIComponent(r.ref)}&sha=${encodeURIComponent(branch)}&per_page=1`);
+      if (cs[0]) r.gone = { sha: cs[0].sha.slice(0, 7), message: cs[0].commit.message.split('\n')[0].slice(0, 120), date: cs[0].commit.committer.date.slice(0, 10) };
+    } catch { /* 調べられなくても候補は残す */ }
+  }
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM rule_audit WHERE repo = ?').bind(repo),
+    ...bulkInsert(env.DB, 'INSERT OR REPLACE INTO rule_audit (key, repo, path, kind, detail, at) VALUES', 6, hits.map(h => [`${h.kind}|${repo}|${h.path}`, repo, h.path, h.kind, JSON.stringify(h.detail), now])),
+  ]);
+  return hits.length;
 }
 
 const ruleText = (i: { heading: string; text: string }) => (i.heading ? i.heading.split(' › ').pop() + '：' : '') + i.text.slice(0, 500);
@@ -84,7 +142,7 @@ type Item = { id: string; doc: string; heading: string; text: string; kind: stri
 type Doc = { id: string; repo: string; path: string; kind: string; applies: string; scope: string; title: string | null; description: string | null; refs: string; external: number; external_by: string | null };
 
 /** 問題の探し方の版。探し方を変えたら上げる（古い結果のままなら、画面で取り込み直しを促す） */
-export const ANALYZE_VERSION = '3';
+export const ANALYZE_VERSION = '4';
 
 /** 問題を探し直す（全部のリポジトリをまとめて。別のリポジトリどうしの重複も見える） */
 export async function analyze(env: Env) {
@@ -148,6 +206,12 @@ export async function analyze(env: Env) {
       add('unreferenced', d.id, null, null, { from });
     }
   }
+
+  // 機能していない・意味がなさそうな文書（取り込みのときに調べた結果）。外から入れたものは除く
+  // （ただし「使っていない技術向けのスキル」は、外から入れたスキルこそ当たるので残す）
+  const extPath = new Set(docs.filter(d => d.external).map(d => `${d.repo}|${d.path}`));
+  for (const r of (await env.DB.prepare('SELECT repo, path, kind, detail FROM rule_audit').all<{ repo: string; path: string; kind: string; detail: string }>()).results)
+    if (r.kind === 'skill_unused' || !extPath.has(`${r.repo}|${r.path}`)) add(r.kind, `${r.repo}|${r.path}`, null, null, { path: r.path, ...JSON.parse(r.detail) });
 
   await env.DB.batch([
     env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('rule_analyze_v', ?)").bind(ANALYZE_VERSION),
