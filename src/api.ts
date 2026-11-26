@@ -6,6 +6,7 @@ import { summarizeStep, summariesOf } from './summary.ts';
 import { consultFor, consultPrompt } from './consult.ts';
 import { exportPr, exportPreview, projectInstruction } from './export.ts';
 import { activityView, refreshActivity } from './activity.ts';
+import { mapView, syncMap } from './workmap.ts';
 import { addComment, contractText, decide as decideChange, draftTree, preview as previewChange, propose, requests as changeRequests, scopeTree, suggestTree } from './scopes.ts';
 
 const isAdmin = (req: Request, env: Env) => {
@@ -40,6 +41,7 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       return json({ doc, items, sections, summaries: await summariesOf(env, [`doc|${doc.id}`, ...heads.map(h => `head|${doc.id}|${h}`)]) });
     }
     if (req.method === 'GET' && p === '/api/scopes/contract') { const r = url.searchParams.get('repo') ?? '', t = await scopeTree(env, r), sc = t.find(x => x.key === url.searchParams.get('scope')); if (!sc) return errorJson('範囲が見つかりません', 404); return json({ text: contractText(r, t, sc.id) }); }
+    if (req.method === 'GET' && p === '/api/map') return json(await mapView(env, url.searchParams.get('repo') ?? '', Math.min(60, Math.max(7, Number(url.searchParams.get('span')) || 21))));
     if (req.method === 'GET' && p === '/api/activity') return json(await activityView(env, url.searchParams.get('repo') ?? ''));
     if (req.method === 'GET' && p === '/api/export/preview') return json(await exportPreview(env, url.searchParams.get('repo') ?? ''));
     if (req.method === 'GET' && p === '/api/export/project') return json({ text: await projectInstruction(env, url.searchParams.get('repo') ?? '', url.searchParams.get('scope') ?? '') });
@@ -53,6 +55,7 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       if (p === '/api/rules/source') return json(await saveSource(env, String(body.repo ?? ''), Array.isArray(body.files) ? body.files as string[] : []));
       if (p === '/api/rules/sync') return json(await syncRules(env, String(body.repo ?? '')));
       if (p === '/api/rules/analyze') return json(await analyze(env));
+      if (p === '/api/map/sync') return json(await syncMap(env, String(body.repo ?? ''), Math.min(6, Math.max(1, Number(body.pages) || 4))));
       if (p === '/api/activity/refresh') return json(await refreshActivity(env, String(body.repo ?? ''), Math.min(15, Math.max(1, Number(body.budget) || 10))));
       if (p === '/api/export/pr') return json(await exportPr(env, String(body.repo ?? '')));
       if (p === '/api/requests/prompt') return json({ text: body.id ? await consultFor(env, String(body.id)) : await consultPrompt(env, String(body.repo ?? ''), (Array.isArray(body.ops) ? body.ops : []) as never, { title: body.title ? String(body.title) : undefined }) });
