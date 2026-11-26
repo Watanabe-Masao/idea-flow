@@ -261,7 +261,11 @@ export function issueLinks(repo: string, issues: { number: number; open: boolean
     const linked = new Set(out.get(i.number)!.filter(l => l.type === 'pr').map(l => l.n));
     const cands = prs.filter(p => !linked.has(p.number) && !explicit.has(p.number) && !/関連\s*[:：]\s*なし/.test(p.body) && p.merged_at >= i.created && p.features.some(f => i.features.includes(f)))
       .sort((a, b) => b.merged_at.localeCompare(a.merged_at)).slice(0, 5);
-    for (const p of cands) add(i.number, prLink(p, 'candidate', `同じ機能のファイルを変えた（${p.files.slice(0, 3).join('、')}${p.files.length > 3 ? ' ほか' : ''}）。番号でのつながりは無い`));
+    for (const p of cands) {
+      // 根拠には、この Issue の機能に当たったファイルだけを出す（PR のほかのファイルは関係ない）
+      const cat = catalogOf(repo), hitF = cat ? p.files.filter(f => featuresOfFiles(cat, [f]).some(id => i.features.includes(id))) : p.files, show = hitF.length ? hitF : p.files;
+      add(i.number, prLink(p, 'candidate', `この Issue と同じ機能のファイルを変えた（${show.slice(0, 3).join('、')}${show.length > 3 ? ` ほか${show.length - 3}件` : ''}）。番号でのつながりは無い`));
+    }
   }
   for (const L of out.values()) { const O = ['parent', 'child', 'from', 'to', 'closes', 'ref', 'candidate']; L.sort((a, b) => O.indexOf(a.kind) - O.indexOf(b.kind) || a.day.localeCompare(b.day)); }
   return out;

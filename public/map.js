@@ -45,14 +45,16 @@ css.textContent = `
 .wm h3{font-size:16px;color:var(--ink);font-weight:600;margin:22px 0 2px}
 `;
 document.head.appendChild(css);
-const ST = ['作っている', '落ち着いた', '止まっている'];
+// 状態は、見た事実のまま言う（「止まっている」と決めつけない）
+const ST = ['直近4日に3件以上マージ', '直近7日にマージあり', '直近7日マージなし'];
 const S = {}; let EL = null, REPO = '';
-const st = r => S[r] || (S[r] = { data: null, span: 21, view: 'feat', ifilt: 'all', isel: null, ifocus: null, cl: null, csel: null, cand: true, filt: -1, sel: null, node: null, busy: false, note: '', synced: false });
+const st = r => S[r] || (S[r] = { data: null, span: 21, view: 'feat', ifilt: 'all', isel: null, ifocus: null, cl: null, csel: null, cand: false, filt: -1, sel: null, node: null, busy: false, note: '', synced: false });
 const lv = n => n === 0 ? 'var(--line)' : n <= 1 ? 'var(--h1)' : n <= 3 ? 'var(--h2)' : 'var(--h3)';
 const md = d => d ? d.slice(5).replace('-', '/') : '';
 const GH = r => `https://github.com/${r}`;
 
-async function load(r) { const s = st(r); s.data = await api(`/api/map?repo=${encodeURIComponent(r)}&span=${s.span}`); }
+// 期間を続けて切り替えたとき、遅れて届いた古い答えで上書きしない（最後に頼んだ分だけを使う）
+async function load(r) { const s = st(r), id = (s.req = (s.req || 0) + 1); const x = await api(`/api/map?repo=${encodeURIComponent(r)}&span=${s.span}`); if (id === s.req) s.data = x; }
 async function sync(r) {
   const s = st(r); if (s.busy) return; s.busy = true; s.note = 'GitHub から最近の更新と Issue を読んでいます…'; draw();
   try {
@@ -117,7 +119,7 @@ function issueView(d, s) {
   const area = `M0 ${H} ` + openAt.map((v, k) => `L${px(k)} ${py(v)}`).join(' ') + ` L${W} ${H} Z`;
   const bars = (arr, cls, dx) => arr.map((v, k) => v ? `<rect x="${px(k) + dx}" y="${py(v)}" width="1.2" height="${H - 2 - py(v)}" fill="${cls}"/>` : '').join('');
   const closed = all.filter(i => !i.open), dur = closed.map(i => dnum(i.closed) - dnum(i.created)).sort((a, b) => a - b);
-  const med = dur.length ? dur[Math.floor(dur.length / 2)] : null;
+  const h = dur.length >> 1, med = dur.length ? (dur.length % 2 ? dur[h] : Math.round((dur[h - 1] + dur[h]) / 2 * 10) / 10) : null; // 偶数件なら真ん中2つの平均
   const ticks = []; for (let k = today; k >= t0; k -= 7) ticks.push(k);
   const axis = `<div class="wm-axis"><i></i><div>${ticks.map(k => `<span style="left:${(k - t0) / Math.max(1, N) * 100}%">${md(dstr(k))}</span>`).join('')}</div></div>`;
   const F = { all: () => true, open: i => i.open, closed: i => !i.open, stale: i => i.stale };
@@ -139,7 +141,7 @@ function issueView(d, s) {
     return `<div class="wm-tl${on ? ' on' : ''}" data-i="${i.number}" role="button" tabindex="0" aria-expanded="${on}"><div class="nm"><b>#${i.number}</b> ${esc(i.title)}</div>
       <div class="wm-track">${ticks.map(k => `<i class="ax" style="left:${(k - t0) / Math.max(1, N) * 100}%"></i>`).join('')}<i class="bar${i.open ? ' open' : ' done'}${i.stale ? ' stale' : ''}" style="left:${x(i.created)};width:calc(${x(end)} - ${x(i.created)})"></i>${prs}</div></div>${det}`;
   }).join('');
-  return `<p class="sub" style="margin-top:8px">Issue を立てた日から閉じた日（開いているものは今日）までを線で、つながるマージ（PR）を点で。押すと、つながりの種類と根拠（どこに書いてあったか）が出ます。番号で書かれていないものは「推測（候補）」として分けて出します。</p>
+  return `<p class="sub" style="margin-top:8px">Issue を立てた日から閉じた日（開いているものは今日）までを線で、つながるマージ（PR）を点で。押すと、つながりの種類と根拠（どこに書いてあったか）が出ます。番号で書かれていないものは「推測（候補）」として分けて出します。<br>出している範囲：${md(dstr(t0))}〜${md(d.today)}（${N}日・最長120日。機能の見方の期間とは別）</p>
   <div class="wm-sum"><div><b>${all.length}</b><span>立てた Issue</span></div><div><b>${closed.length}</b><span>閉じた（かかった日数の中央 ${med ?? '—'}日）</span></div>
   <div class="hot"><b>${all.length - closed.length}</b><span>開いている</span></div><div><b style="color:var(--warn)">${all.filter(i => i.stale).length}</b><span>古くなっている候補</span></div></div>
   <h3>開いている Issue の数の移り変わり</h3><p class="sub">面は毎日の終わりに開いていた数。緑の棒は立てた数、灰の棒は閉じた数。</p>
@@ -241,7 +243,7 @@ function draw() {
   if (!EL) return;
   const s = st(REPO), d = s.data;
   const top = `<div class="row" style="margin-top:0"><button class="btn" id="wmsync" ${s.busy ? 'disabled' : ''}>${s.busy ? '読んでいます…' : 'GitHub から読み直す'}</button>
-    <div class="seg" role="group" aria-label="期間">${[[21, '3週間'], [60, '2か月']].map(([v, l]) => `<button data-span="${v}" aria-pressed="${s.span === v}">${l}</button>`).join('')}</div></div>
+    ${s.view === 'feat' ? `<div class="seg" role="group" aria-label="期間">${[[21, '3週間'], [60, '2か月']].map(([v, l]) => `<button data-span="${v}" aria-pressed="${s.span === v}">${l}</button>`).join('')}</div>` : ''}</div>
     <div class="seg" role="group" aria-label="見かた" style="margin:8px 0 0;margin-left:0">${[['feat', '機能'], ['cluster', 'クラスター'], ['issue', 'Issue の経過']].map(([v, l]) => `<button data-view="${v}" aria-pressed="${s.view === v}">${l}</button>`).join('')}</div>
     ${s.note ? `<p class="sub" style="margin-top:6px">${esc(s.note)}</p>` : ''}`;
   if (!d) { EL.innerHTML = `<div class="wm">${top}<p class="sub" style="margin-top:8px">読み込み中…</p></div>`; return; }
@@ -262,7 +264,7 @@ function draw() {
   const nodeNote = s.node ? `<div class="card" style="margin-top:8px"><b>${esc(d.nodes[s.node].name)}</b><div class="sub">${esc(d.nodes[s.node].note)}。使っている機能：${esc(d.features.filter(f => f.data.includes(s.node)).map(f => f.name).join('、') || 'なし')}</div>${d.issues.filter(i => i.nodes.includes(s.node)).map(i => iline(d, i)).join('')}</div>` : '';
   EL.innerHTML = `<div class="wm">${top}
   <p class="sub" style="margin-top:8px">機能の一覧と、マージした PR（変えたファイル）・Issue から自動で作ります。読むだけで、リポジトリには書きません。今日（${md(d.today)}）までの${n}日。</p>
-  <div class="wm-sum"><div class="hot"><b>${c.stopped}</b><span>止まっている機能（直近7日に作業なし）</span></div><div><b>${c.building}／${c.settled}</b><span>作っている／落ち着いた</span></div>
+  <div class="wm-sum"><div class="hot"><b>${c.stopped}</b><span>直近7日マージなしの機能</span></div><div><b>${c.building}／${c.settled}</b><span>作っている／落ち着いた</span></div>
   <div><b>${c.openIssues}</b><span>開いている Issue（うち古い候補 ${c.stale}）</span></div><div><b style="color:var(--red2)">${c.unused}</b><span>貯めているが画面なし</span></div></div>
   ${writing(d.writing)}
   <h3>機能ごとの稼働</h3><p class="sub">1マス＝1日（マージした PR の数）。マスを指でなぞると、その日の作業が下に出ます。名前を押すと中身が開きます。</p>
@@ -270,7 +272,7 @@ function draw() {
   <div class="wm-chips">${[['すべて', -1], ...ST.map((l, i) => [l, i])].map(([l, i]) => `<button class="wm-chip" data-filt="${i}" aria-pressed="${s.filt === i}">${l}</button>`).join('')}</div>
   <div class="wm-board"><div class="wm-days"><span></span><div class="wm-strip" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${d.days.map((x, k) => `<i class="l">${(n - 1 - k) % step === 0 ? md(x) : ''}</i>`).join('')}</div></div>
   <div id="wmrows">${rows}</div></div>
-  <p class="sub" style="margin-top:8px">状態：直近7日に作業なし＝止まっている。直近4日に3件以上＝作っている。それ以外＝落ち着いた。</p>
+  <p class="sub" style="margin-top:8px">状態は、その機能のファイルを変えた PR のマージの数から：直近4日に3件以上／直近7日にマージあり／直近7日マージなし。</p>
   <h3>開いている Issue と、つながる機能</h3><p class="sub">関係する機能がすべて止まっていて、Issue も7日以上動いていないものに「古くなっている候補」を付けます。閉じるかを決めるのは人です。</p>
   ${[...open].sort((a, b) => b.stale - a.stale).map(i => iline(d, i)).join('') || '<p class="sub">なし</p>'}
   <details style="margin-top:8px"><summary class="sub">閉じた Issue ${closed.length} 件</summary>${closed.map(i => iline(d, i)).join('')}</details>

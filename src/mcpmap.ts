@@ -5,7 +5,7 @@ import { catalogOf, mapView, syncMap } from './workmap.ts';
 import { selfCheck, WRITING_RULES } from './selfcheck.ts';
 
 type MapData = Extract<Awaited<ReturnType<typeof mapView>>, { catalog: true }>;
-const ST = ['作っている', '落ち着いた', '止まっている'];
+const ST = ['直近4日に3件以上マージ', '直近7日にマージあり', '直近7日マージなし'];
 const KIND: Record<string, string> = { parent: '親子（親）', child: '親子（子）', from: '引き継ぎ元（本文から）', to: '引き継ぎ先（本文から）', closes: 'これで閉じた', ref: '番号で参照', candidate: '推測（候補・確定ではない）' };
 const md = (d: string | null) => (d ? d.slice(5).replace('-', '/') : 'なし');
 
@@ -58,7 +58,7 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
   if (action === 'map') {
     const rv = d.sync?.reviewed_at ? new Date(Date.parse(d.sync.reviewed_at) + 9 * 3600e3).toISOString().slice(0, 10) : null;
     const L = [`■ ${d.repo} の地図（${md(d.today)} まで${d.days.length}日・PR ${c.prs}件）　毎日の見直し：${rv === d.today ? '今日は済み' : `今日はまだ（前回 ${rv ? md(rv) : 'なし'}）→ action="review"`}`,
-      `作っている ${c.building}・落ち着いた ${c.settled}・止まっている ${c.stopped}／開いている Issue ${c.openIssues}（古くなっている候補 ${c.stale}）／どの機能にも当たらない作業 ${d.unmatched.length}／貯めているが画面なしのデータ ${c.unused}`, ''];
+      `直近4日に3件以上 ${c.building}・直近7日にマージあり ${c.settled}・直近7日マージなし ${c.stopped}／開いている Issue ${c.openIssues}（古くなっている候補 ${c.stale}）／どの機能にも当たらない作業 ${d.unmatched.length}／貯めているが画面なしのデータ ${c.unused}`, ''];
     let g = '';
     for (const f of d.features) {
       if (f.group !== g) { g = f.group; L.push(`【${g}】`); }
@@ -141,7 +141,7 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
     const unused = Object.values(d.nodes).filter(n => n.note === '画面なし');
     L.push('', '3. 人の判断を待っているもの（前からのもの。増えたときだけ人に伝える）',
       `   - 古くなっている候補の Issue ${stale.length}件：${stale.map(i => '#' + i.number).join(' ') || 'なし'}`,
-      `   - 止まっているのに開いた Issue がある機能 ${stoppedOpen.length}：${stoppedOpen.map(f => f.name).join('、') || 'なし'}`,
+      `   - 直近7日マージなしなのに開いた Issue がある機能 ${stoppedOpen.length}：${stoppedOpen.map(f => f.name).join('、') || 'なし'}`,
       `   - 貯めているのに画面で使っていないデータ ${unused.length}：${unused.map(n => n.name).join('、') || 'なし'}`);
     L.push('', '人への伝え方：1 は直したことを1行で。2 は案を添えて決めてもらう。3 は数が増えたときだけ。どれも無ければ「見直し：変わりなし」と1行で。');
     if (!a.peek) await env.DB.prepare('UPDATE map_sync SET reviewed_at = ? WHERE repo = ?').bind(new Date().toISOString(), d.repo).run();

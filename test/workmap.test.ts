@@ -209,3 +209,18 @@ test('同期：重なったら後の方は何もしない／ロックが切れ�
     assert.equal(t1.title, '新しい題');                                 // 古い題に巻き戻らない
   } finally { globalThis.fetch = real; delete CATALOGS['o/r']; }
 });
+
+test('推測の根拠には、その Issue の機能に当たったファイルだけを出す', async () => {
+  const { issueLinks } = await import('../src/workmap.ts');
+  CATALOGS['o/x'] = { features: [
+    { id: 'story', group: 'g', name: '物語', desc: '', files: ['^src/ui/Moon'], data: [], aliases: [] },
+    { id: 'ci', group: 'g', name: 'CI', desc: '', files: ['^\\.github/'], data: [], aliases: [] },
+  ], nodes: [], issues: {}, words: {} } as any;
+  try {
+    const m = issueLinks('o/x', [{ number: 1, open: true, title: 't', created: '2026-11-18T00:00:00Z', closed: null, features: ['story'], refs: [] }],
+      [{ number: 9, title: 'p', url: 'u', merged_at: '2026-11-20T00:00:00Z', body: '', closes: [], files: ['.github/a.yml', '.github/b.yml', 'src/ui/Moon.tsx'], features: ['story', 'ci'] } as any]);
+    const ev = m.get(1)![0].evidence[0];
+    assert.match(ev, /src\/ui\/Moon\.tsx/);
+    assert.doesNotMatch(ev, /\.github/);
+  } finally { delete CATALOGS['o/x']; }
+});
