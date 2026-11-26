@@ -4,7 +4,7 @@ import { syncLinear, attachCommit } from './linear.ts';
 import { syncGithub } from './github.ts';
 import { refreshEmbeddings, embedMany, MODEL } from './embed.ts';
 import { errorJson, json, jstDay, newId, nowIso, safeEqual } from './util.ts';
-import { analyze, dismiss, listFiles, rulesView, saveSource, setExternal, syncRules } from './rules.ts';
+import { analyze, dismiss, listFiles, rulesView, saveSource, setExternal, syncRules, xray } from './rules.ts';
 
 const isAdmin = (req: Request, env: Env) => {
   const h = req.headers.get('authorization') ?? '';
@@ -111,6 +111,7 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
     }
     if (req.method === 'GET' && p === '/api/eval') return json(await evaluate(env));
     if (req.method === 'GET' && p === '/api/rules') return json(await rulesView(env));
+    if (req.method === 'GET' && p === '/api/rules/xray') return json(await xray(env, url.searchParams.get('repo') ?? '', url.searchParams.get('scene') ?? ''));
     if (req.method === 'GET' && p === '/api/rules/files') return json(await listFiles(env, url.searchParams.get('repo') ?? ''));
     if (req.method === 'GET' && p === '/api/selftest') {
       const v = await embedMany(env, ['満月の物語：ページ送り', '予報の履歴の取り込み']);

@@ -38,7 +38,7 @@ test('MCP：合言葉・初期化・道具・読むだけの道具で見える�
     assert.match(init.json.result.instructions, /決めるのは人/);
     assert.equal((await rpc(env, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
     const tools = (await rpc(env, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json.result.tools;
-    assert.deepEqual(tools.map((t: any) => t.name), ['rules_overview', 'list_rule_findings', 'read_rule_doc', 'search_rules']);
+    assert.deepEqual(tools.map((t: any) => t.name), ['rules_overview', 'list_rule_findings', 'read_rule_doc', 'xray_scene', 'search_rules']);
     assert.ok(tools.every((t: any) => t.annotations.readOnlyHint));
     assert.match((await call(env, 'rules_overview')).content[0].text, /まだ何も取り込まれていません/);
     await saveSource(env, 'o/r', Object.keys(files));

@@ -2,7 +2,7 @@
 // GitHub には書き込まない。人が「問題ではない」と決めたものは rule_dismissed に残る。
 import type { Env } from './types.ts';
 import { classify, defaultPick, externalByLicense, parseRules, resolveRef, termsOf, TEMP_WORDS, NEG_WORDS } from './rules-parse.ts';
-import { loadVectors, upsertEmbeddings } from './embed.ts';
+import { embedMany, loadVectors, upsertEmbeddings } from './embed.ts';
 import { dot, type Vec } from './vec.ts';
 import { bulkInsert, nowIso, sha256 } from './util.ts';
 import { diagnose } from './diagnosis.ts';
@@ -200,4 +200,53 @@ export async function dismiss(env: Env, key: string, why: string | null) {
   if (!(await env.DB.prepare('SELECT key FROM rule_findings WHERE key = ?').bind(key).first())) throw new Error('その問題は見つかりません');
   await env.DB.prepare('INSERT OR REPLACE INTO rule_dismissed (key, at, why) VALUES (?, ?, ?)').bind(key, nowIso(), why).run();
   return { ok: true };
+}
+
+/**
+ * 場面のレントゲン：ある場面（例「予報ビューに比較表を足す」）で、Claude に何が届くかを層ごとに出す。
+ * 自動で届く → 参照で届く → 場面で呼ばれそうなスキル → 場面に関係するのに届かない決まり。
+ */
+export async function xray(env: Env, repo: string, scene: string) {
+  const q = scene.trim().slice(0, 300);
+  if (!q) throw new Error('場面を入れてください');
+  const docs = (await env.DB.prepare('SELECT * FROM rule_docs WHERE repo = ?').bind(repo).all<Doc>()).results;
+  if (!docs.length) throw new Error('このリポジトリはまだ取り込まれていません');
+  const items = (await env.DB.prepare('SELECT i.id, i.doc, i.heading, i.text, i.line, i.kind FROM rule_items i JOIN rule_docs d ON d.id = i.doc WHERE d.repo = ?').bind(repo).all<Item & { line: number }>()).results;
+  const [qv] = await embedMany(env, [q]);
+  const vecs = await loadVectors(env, 'rule');
+  const sim = (id: string) => (vecs.has(id) ? dot(qv, vecs.get(id)!) : -1);
+  const g = refGraph(docs);
+  const entries = docs.filter(d => d.applies === 'always');
+  const delivered = new Set<string>();
+  for (const e of entries) for (const id of reachFrom(g, e.id)) delivered.add(id);
+  const count = (id: string) => items.filter(i => i.doc === id).length;
+  const docInfo = (d: Doc) => ({ path: d.path, items: count(d.id), external: !!d.external });
+
+  // スキル：説明文と場面の近さ。いちばん近いものとの差で「呼ばれそう」を決める（近さの絶対値は道具やモデルで変わるため）
+  const skills = docs.filter(d => d.applies === 'skill').map(d => {
+    const desc = items.find(i => i.doc === d.id && i.kind === 'desc');
+    return { path: d.path, title: d.title, external: !!d.external, score: desc ? sim(desc.id) : -1 };
+  }).sort((a, b) => b.score - a.score);
+  const top = skills[0]?.score ?? 0;
+  const skillRows = skills.map(s => ({ ...s, score: Math.round(s.score * 100) / 100, likely: s.score >= 0.45 && s.score >= top - 0.06 }));
+
+  // 場面に関係するのに届かない決まり（自動でも参照でもスキルでも届かない文書の中で、場面に近いもの）
+  // 近さの絶対値はモデルで変わるので、近い順の上位から拾う（遠すぎるものは除く）
+  const near = items.filter(i => i.kind !== 'desc').map(i => ({ i, s: sim(i.id) })).filter(x => x.s >= 0.35).sort((a, b) => b.s - a.s).slice(0, 40);
+  const notDelivered = new Map<string, { path: string; best: number; rules: { text: string; line: number; heading: string; score: number }[] }>();
+  for (const { i, s } of near) {
+    const d = docs.find(x => x.id === i.doc)!;
+    if (delivered.has(d.id) || d.applies === 'skill' || d.external) continue;
+    const e = notDelivered.get(d.id) ?? { path: d.path, best: s, rules: [] };
+    if (e.rules.length < 3) e.rules.push({ text: i.text, line: i.line, heading: i.heading, score: Math.round(s * 100) / 100 });
+    notDelivered.set(d.id, e);
+  }
+  return {
+    repo, scene: q,
+    auto: entries.map(docInfo),
+    byRef: docs.filter(d => delivered.has(d.id) && d.applies !== 'always').map(docInfo),
+    skills: skillRows.slice(0, 6),
+    missing: [...notDelivered.values()].sort((a, b) => b.best - a.best).slice(0, 6).map(m => ({ ...m, best: Math.round(m.best * 100) / 100 })),
+    memory: null as null, // メモリの使い分け（#14）ができたら、ここに使う／使わないメモリを入れる
+  };
 }

@@ -171,6 +171,14 @@ function findingHtml(f){let body='';
  else if(f.kind==='skill_overlap'){const a=rdoc(f.a),b=rdoc(f.b);body=`<b>${esc(a.title||a.path)}</b> と <b>${esc(b.title||b.path)}</b><small>説明文の近さ ${(+f.score).toFixed(2)}</small>`}
  else{const A=ritem(f.a),B=f.b?ritem(f.b):null;body=`${A?ruleCard(A):''}${B?`<p class="sub" style="margin:2px 0">↕ ${f.kind==='duplicate'?'ほぼ同じ':'近い'}（近さ ${(+f.score).toFixed(2)}）</p>${ruleCard(B)}`:''}${f.kind==='temporary'?`<small>当たった言葉：「${esc(f.detail.word)}」</small>`:''}${f.kind==='definition'?`<small>同じ言葉：${f.detail.terms.map(esc).join('、')}</small>`:''}`}
  return`<li>${body}<div class="row"><input data-why="${esc(f.key)}" placeholder="理由（任意）" style="flex:1 1 160px"><button class="btn s" data-dismiss="${esc(f.key)}">問題ではない</button></div></li>`}
+let XR={};
+function xrayHtml(x){const sec=(cls,t,body)=>`<div style="border:1px solid var(--line);border-left:4px solid ${cls};border-radius:0;padding:8px 10px;margin-top:8px"><b>${t}</b><div style="margin-top:4px;font-size:14px">${body}</div></div>`;
+ return`<p class="sub" style="margin-top:8px">場面「${esc(x.scene)}」で Claude に届くもの</p>
+ ${sec('var(--ink)','自動で届く',x.auto.length?x.auto.map(d=>esc(d.path)+`（${d.items}）`).join('、'):'<span style="color:var(--red)">なし（入口が無い）</span>')}
+ ${sec('var(--ink)','参照で届く',x.byRef.length?x.byRef.map(d=>esc(d.path)+`（${d.items}）`).join('、'):'なし')}
+ ${sec('var(--mute)','場面で呼ばれそうなスキル',x.skills.length?x.skills.map(s=>`<div>${s.likely?'<b>◎ ':'・ '}${esc(s.title||s.path)}${s.likely?'</b>':''} <span class="sub">近さ ${s.score}${s.external?'・外から入れたもの':''}</span></div>`).join(''):'なし')}
+ ${sec('var(--red)','この場面に関係するのに届かない決まり',x.missing.length?`<p class="sub" style="margin:0 0 4px">会話で渡さないと守られません。</p>`+x.missing.map(m=>`<div style="margin-top:6px"><b>${esc(m.path)}</b> <span class="sub">近さ ${m.best}</span>${m.rules.map(r=>`<small style="margin-top:2px">${r.line}行目：${esc(r.text)}</small>`).join('')}</div>`).join(''):'なし')}
+ ${sec('var(--line)','メモリ','<span class="sub">まだ管理していません（メモリの使い分けは今後追加）</span>')}`}
 function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">読み込み中…</p>';return}
  if(RDOC){const d=rdoc(RDOC);if(!d){RDOC=null;return rulesView()}const its=RV.items.filter(i=>i.doc===d.id);
   const byH={};its.forEach(i=>(byH[i.heading||'（見出しなし）']=byH[i.heading||'（見出しなし）']||[]).push(i));
@@ -181,6 +189,7 @@ function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">�
  el.innerHTML=`<h2>決まりの診断</h2><p class="sub">リポジトリの決まり（CLAUDE.md・スキル・docs など）が Claude にちゃんと届いているか、ぶつかっていないかを見ます。読むだけで、GitHub には書き込みません。</p>
  ${repos.map(r=>{const s=RV.sources.find(x=>x.repo===r),ds=RV.docs.filter(d=>d.repo===r),dg=RV.diagnosis[r]||{conclusions:[],external:[]};const key=r.replace(/[^\w]/g,'_');
   return`<div class="card" style="margin-top:14px;padding:12px"><div class="row" style="margin:0;justify-content:space-between"><b>${esc(r)}</b><span class="sub">${s&&s.synced_at?esc(s.synced_at.slice(0,10)):'未取り込み'}</span></div>
+  ${ds.length?`<div style="margin-top:8px"><div class="row" style="margin:0"><input id="xs-${key}" placeholder="場面（例：予報ビューに比較表を足す）" value="${esc((XR[r]||{}).scene||'')}" style="flex:1 1 200px"><button class="btn s p" data-xray="${esc(r)}">レントゲン</button></div>${XR[r]?xrayHtml(XR[r]):''}</div>`:''}
   ${!ds.length?`<p class="sub" style="margin-top:8px">まだ取り込んでいません。</p>`:dg.conclusions.length?dg.conclusions.map((c,k)=>{const fs=RV.findings.filter(f=>f.kind===c.kind&&fRepo(f)===r),op=ROPEN.has(r+'|'+c.kind);
    return`<div style="border-top:1px solid var(--line);padding:12px 0 8px;margin-top:8px"><p style="margin:0;font-weight:700;font-size:17px">${k+1}. ${esc(c.title)}</p><p style="margin:4px 0" class="sub">${esc(c.why)}</p><p style="margin:6px 0"><span class="badge k">次の一手</span> ${esc(c.next)}</p>
    <button class="btn s" data-ropen="${esc(r+'|'+c.kind)}">${op?'閉じる':'詳しく見る'}</button>${op?`<ul class="items" style="margin-top:6px">${fs.slice(0,40).map(findingHtml).join('')}</ul>${fs.length>40?`<p class="sub">ほか ${fs.length-40}件</p>`:''}`:''}</div>`}).join(''):'<p style="margin-top:8px">問題は見つかっていません。</p>'}
@@ -210,6 +219,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
   say(`取り込み：課題 ${r.linear.issues}・コミット ${r.github.commits}／埋め込み ${r.embeddings.embedded}件／提案：課題 ${r.suggestions.commitIssue}・テーマ ${r.suggestions.commitTheme}・新しい塊 ${r.suggestions.newClusters}`);b.disabled=false;await load();return}
  if(b.id==='runEval'){await runEval();return}
  if(b.dataset.rback){RDOC=null;rulesView();return}
+ if(b.dataset.xray){const r=b.dataset.xray,inp=$('#xs-'+r.replace(/[^\w]/g,'_'));if(!inp.value.trim())return say('場面を入れてください');b.disabled=true;say('この場面で届くものを調べています…');XR[r]=await api('/api/rules/xray?repo='+encodeURIComponent(r)+'&scene='+encodeURIComponent(inp.value));say('');rulesView();return}
  if(b.dataset.ropen){const k=b.dataset.ropen;ROPEN.has(k)?ROPEN.delete(k):ROPEN.add(k);rulesView();return}
  if(b.dataset.rext){const [repo,...pp]=b.dataset.rext.split('|');b.disabled=true;await api('/api/rules/external',{method:'POST',body:JSON.stringify({repo,path:pp.join('|'),external:b.dataset.v2==='1'})});await loadRules();say('変えました（次の取り込みからも効きます）');return}
  if(b.dataset.rfiles){await pickFiles(b.dataset.rfiles);return}

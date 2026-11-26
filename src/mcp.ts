@@ -1,7 +1,7 @@
 // Claude のコネクタ（MCP、Streamable HTTP）。会話の Claude が、決まりの見える化の結果を読んで人と相談するための入口。
 // いまは読むだけ（GitHub にもアプリのデータにも書き込まない）。合言葉は URL の /mcp/<MCP_TOKEN>。
 import type { Env } from './types.ts';
-import { rulesView } from './rules.ts';
+import { rulesView, xray } from './rules.ts';
 import { PLAIN_APPLIES } from './diagnosis.ts';
 import { embedMany, loadVectors } from './embed.ts';
 import { dot } from './vec.ts';
@@ -45,6 +45,12 @@ const TOOLS = [
     name: 'read_rule_doc',
     description: '1つの文書の決まりを、見出しごとに行番号つきで読む。長い文書は heading で見出しを絞るか、offset で続きを読む。',
     inputSchema: { type: 'object', properties: { repo: { type: 'string' }, path: { type: 'string' }, heading: { type: 'string', description: '見出しの一部（含むものだけ）' }, offset: { type: 'number' }, limit: { type: 'number', description: '初期値 80、最大 200' } }, required: ['repo', 'path'], additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'xray_scene',
+    description: '場面のレントゲン。ある場面（例「予報ビューに比較表を足す」「絵本の8Pの下絵」）で、Claude に何が届くかを層ごとに返す：自動で届く／参照で届く／場面で呼ばれそうなスキル／場面に関係するのに届かない決まり。作業を始める前や、決まりの範囲を相談するときに使う。',
+    inputSchema: { type: 'object', properties: { repo: { type: 'string' }, scene: { type: 'string', description: 'これからする作業や話題を一文で' } }, required: ['repo', 'scene'], additionalProperties: false },
     annotations: { readOnlyHint: true },
   },
   {
@@ -128,6 +134,18 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
       for (const it of page) { if (it.heading !== h) { h = it.heading; lines.push('', `## ${h || '（見出しなし）'}`); } lines.push(`${it.line}: ${it.text}`); }
       if (off + page.length < all.length) lines.push('', `続きは offset=${off + page.length}`);
       return text(lines.join('\n'));
+    }
+    case 'xray_scene': {
+      const x = await xray(env, String(a.repo ?? ''), String(a.scene ?? ''));
+      const L = [`場面「${x.scene}」で ${x.repo} から Claude に届くもの`, '',
+        `■ 自動で届く：${x.auto.length ? x.auto.map(d => `${d.path}（${d.items}）`).join('、') : 'なし（入口が無い）'}`,
+        `■ 参照で届く：${x.byRef.length ? x.byRef.map(d => `${d.path}（${d.items}）`).join('、') : 'なし'}`,
+        '■ 場面で呼ばれそうなスキル（説明文との近さ）：',
+        ...(x.skills.length ? x.skills.map(s => `  ${s.likely ? '◎' : '・'} ${s.title ?? s.path} ${s.score}${s.external ? '（外から入れたもの）' : ''}`) : ['  なし']),
+        '■ この場面に関係するのに届かない決まり（会話で渡さないと守られない）：',
+        ...(x.missing.length ? x.missing.flatMap(m => [`  ${m.path}（近さ ${m.best}）`, ...m.rules.map(r => `    ${r.line}: ${r.text}`)]) : ['  なし']),
+        '■ メモリ：まだ管理していない（メモリの使い分けは今後追加）'];
+      return text(L.join('\n'));
     }
     case 'search_rules': {
       const q = String(a.query ?? '').trim().slice(0, 300);
