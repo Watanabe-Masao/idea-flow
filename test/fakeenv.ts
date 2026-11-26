@@ -27,6 +27,16 @@ export function fakeEnv() {
     for (let i = 0; i < t.length - 1; i++) { let h = 0; for (const c of t.slice(i, i + 2)) h = (h * 31 + c.charCodeAt(0)) >>> 0; v[h % DIM] += 1; }
     return v;
   };
-  const AI = { run: async (_m: string, inp: { text: string[] }) => ({ data: inp.text.map(vec) }) };
+  // 文を作るモデル：見出しの番号ごとに「要約:見出しの頭」を返す（要約の流れを確かめるため）
+  const AI = { run: async (_m: string, inp: { text?: string[]; messages?: { content: string }[] }) => {
+    if (inp.messages) {
+      const u = inp.messages[inp.messages.length - 1].content;
+      if (u.includes('"s"')) return { response: JSON.stringify({ s: '要約:' + u.slice(u.indexOf('「') + 1, u.indexOf('」')) }) };
+      const out: Record<string, string> = {};
+      for (const m of u.matchAll(/\[(\d+)\] 見出し：(.+)/g)) out[m[1]] = '要約:' + m[2];
+      return { response: '答え：' + JSON.stringify(out) };
+    }
+    return { data: inp.text!.map(vec) };
+  } };
   return { DB: D1, AI, MCP_TOKEN: 'tok', ADMIN_TOKEN: 'adm' } as never;
 }

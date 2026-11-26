@@ -3,8 +3,9 @@
 import type { Env } from './types.ts';
 import { rulesView, xray } from './rules.ts';
 import { LIST, PLAIN_APPLIES } from './diagnosis.ts';
-import { contractText, propose, requests as changeRequests, scopeTree, type Op } from './scopes.ts';
+import { addComment, contractText, propose, requests as changeRequests, scopeTree, type Op } from './scopes.ts';
 import { embedMany, loadVectors } from './embed.ts';
+import { consultFor } from './consult.ts';
 import { dot } from './vec.ts';
 import { safeEqual } from './util.ts';
 
@@ -20,6 +21,7 @@ idea-flow は、リポジトリの CLAUDE.md・ROLE.md・SKILL.md・決まりの
 - 外から入れた決まり（ライセンスつきのスキルなど、書き換えないもの）は診断から外してある。
 - 寿命（短期／長期）はまだ人が決めていないので、すべて「未分類」です。勝手に決めず、分類の案として出してください。
 - 問題の種類（list_rule_findings の kind）：no_entry 入口が無い / unreferenced 入口からたどれない / duplicate 同じことが2か所 / definition 同じ言葉を2か所で説明 / conflict 食い違いかもしれない / temporary 終わったかもしれない / skill_overlap 似た場面で呼ばれるスキル / dead_ref もう無いファイルを指している / skill_unused 使っていない技術向けのスキル / orphan どこからも案内されていない文書。
+- 人はアプリで、決まりにピン（見直してほしい）を付けたり、書き換えたりして、変更リクエストとして出します。action="consult" で承認待ちを見て、id を渡すと相談の中身（原文・書き換えたあと・効いている範囲・意味の近い決まり）が出ます。読んだら、影響と副作用を action="comment" で返事してください。あなたからの書き換えの提案は propose の ops に {op:"edit", path, heading, item?, before, after} で出せます（反映は人の承認）。
 - dead_ref・skill_unused・orphan は「機能していない・意味がなさそう」の候補です。消す・直すを決めるのは人です。消したコミットや中身を確かめてから、残す理由がないかも一緒に考えてください。`;
 
 const KIND_JA: Record<string, string> = { no_entry: '入口が無い', unreferenced: '入口からたどれない', duplicate: '同じことが2か所', definition: '同じ言葉を2か所で説明', conflict: '食い違いかもしれない', temporary: '終わったかもしれない', skill_overlap: '似た場面で呼ばれるスキル', dead_ref: 'もう無いファイルを指している', skill_unused: '使っていない技術向けのスキル', orphan: 'どこからも案内されていない' };
@@ -103,13 +105,15 @@ const ACTIONS: Record<string, { tool: string; summary: string }> = {
   contract: { tool: 'read_scope_contract', summary: 'その範囲で Claude に渡す内容。args: repo, scope' },
   propose: { tool: 'propose_scope_change', summary: '範囲の木の変更リクエストを出す（反映は人の承認）。args: repo, title, reason, ops' },
   search: { tool: 'search_rules', summary: '意味の近い決まりを探す。args: query, repo?, limit?' },
+  consult: { tool: 'consult', summary: '人のピン・書き換え・範囲の変更の相談。args: repo?（承認待ちの一覧）／id（その変更リクエストの相談の中身。原文・書き換えたあと・効いている範囲・意味の近い決まり）' },
+  comment: { tool: 'comment', summary: '変更リクエストに返事を書く（影響と副作用の見立て）。args: id, text' },
 };
 const ENTRY = {
   name: 'idea_flow',
-  description: 'idea-flow のひとつの入口。action と args を渡す。まず action="help" で、いまできること（機能が増えても、この道具のまま使える）を確かめる。主な action：overview（診断書）・xray（場面のレントゲン）・scopes（範囲の木）・contract（範囲の契約）・propose（変更リクエストを出す。反映は人の承認）・findings・read_doc・search。',
+  description: 'idea-flow のひとつの入口。action と args を渡す。まず action="help" で、いまできること（機能が増えても、この道具のまま使える）を確かめる。主な action：overview（診断書）・consult（人のピンや書き換えの相談）・comment（相談への返事）・xray（場面のレントゲン）・scopes（範囲の木）・contract（範囲の契約）・propose（変更リクエストを出す。反映は人の承認）・findings・read_doc・search。',
   inputSchema: {
     type: 'object',
-    properties: { action: { type: 'string', description: 'help / overview / findings / read_doc / xray / scopes / contract / propose / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
+    properties: { action: { type: 'string', description: 'help / overview / consult / comment / findings / read_doc / xray / scopes / contract / propose / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
     required: ['action'], additionalProperties: false,
   },
 };
@@ -230,6 +234,22 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
       const L = [`変更リクエストを出しました（id=${r.id}）。反映するかは、人がアプリの「決まり」タブで決めます。`, '', '■ 承認したら変わること'];
       for (const p of pv) L.push(`- ${p.chain.join(' › ')}${p.isNew ? '（新しい範囲）' : ''}${p.starts.length ? `／効き始める：${p.starts.join('、')}` : ''}${p.stops.length ? `／効かなくなる：${p.stops.join('、')}` : ''}${p.newExceptions.length ? `／例外が増える：${p.newExceptions.join('、')}` : ''}${p.droppedExceptions.length ? `／例外がなくなる：${p.droppedExceptions.join('、')}` : ''}`);
       return text(L.join('\n'));
+    }
+    case 'consult': {
+      if (a.id) return text(await consultFor(env, String(a.id)));
+      const repos = a.repo ? [String(a.repo)] : [...new Set(v.sources.map(x => x.repo))];
+      const L: string[] = [];
+      for (const r of repos) {
+        const rs = ((await changeRequests(env, r)) as unknown as { id: string; title: string; status: string; by: string; ops: Op[]; comments: { by: string }[] }[]).filter(x => x.status === 'pending');
+        if (!rs.length) continue;
+        L.push(`■ ${r}`);
+        for (const x of rs) L.push(`- id=${x.id}「${x.title}」（${x.by === 'ai' ? 'Claude' : '人'}・ピン ${x.ops.filter(o => o.op === 'pin').length}・書き換え ${x.ops.filter(o => o.op === 'edit').length}・範囲 ${x.ops.filter(o => o.op !== 'pin' && o.op !== 'edit').length}${x.comments.some(c => c.by === 'ai') ? '・返事済み' : ''}）`);
+      }
+      return text(L.length ? L.join('\n') + '\n\nid を渡すと、その相談の中身を出します（action="consult", args: {id}）。' : '承認待ちの相談はありません。');
+    }
+    case 'comment': {
+      const r = await addComment(env, String(a.id ?? ''), 'ai', String(a.text ?? ''));
+      return text(`返事を書きました（${r.id}）。人がアプリで読んで、承認するか決めます。`);
     }
     case 'search_rules': {
       const q = String(a.query ?? '').trim().slice(0, 300);

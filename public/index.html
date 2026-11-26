@@ -157,7 +157,7 @@ async function sets(){const st=await api('/api/settings');
  <div class="row"><button class="btn p" id="saveSets">保存して提案を作り直す</button></div>`}
 async function saveSets(b){await api('/api/settings',{method:'POST',body:JSON.stringify(b)});say('しきい値を保存しました。提案を計算し直します…');const r=await api('/api/suggest',{method:'POST'});await load();await sets();say(`計算し直しました（課題 ${r.commitIssue}・テーマ ${r.commitTheme}・新しい塊 ${r.newClusters}）`)}
 // ── 決まりの診断（#7・#8） ──
-let RV=null,RDOC=null,ROPEN=new Set();
+let RV=null,RDOC=null,ROPEN=new Set(),RREPO='',RSUB='board';
 const APPLIES={always:'自動で届く',role:'役割として届く',skill:'場面に合えば届く（スキル）',referenced:'渡さないと届かない'};
 const FK={no_entry:'入口が無い',unreferenced:'入口からたどれない',duplicate:'同じことが2か所',definition:'同じ言葉を2か所で説明',conflict:'食い違いかもしれない',temporary:'終わったかもしれない',skill_overlap:'似た場面で呼ばれるスキル',dead_ref:'もう無いファイルを指している',skill_unused:'使っていない技術向けのスキル',orphan:'どこからも案内されていない'};
 async function loadRules(){RV=await api('/api/rules');await Promise.all([...new Set(RV.docs.map(d=>d.repo))].map(r=>loadScopes(r).catch(()=>{})));rulesView()}
@@ -176,44 +176,9 @@ function findingHtml(f){let body='';
  else{const A=ritem(f.a),B=f.b?ritem(f.b):null;body=`${A?ruleCard(A):''}${B?`<p class="sub" style="margin:2px 0">↕ ${f.kind==='duplicate'?'ほぼ同じ':'近い'}（近さ ${(+f.score).toFixed(2)}）</p>${ruleCard(B)}`:''}${f.kind==='temporary'?`<small>当たった言葉：「${esc(f.detail.word)}」</small>`:''}${f.kind==='definition'?`<small>同じ言葉：${f.detail.terms.map(esc).join('、')}</small>`:''}`}
  return`<li>${body}<div class="row"><input data-why="${esc(f.key)}" placeholder="理由（任意）" style="flex:1 1 160px"><button class="btn s" data-dismiss="${esc(f.key)}">問題ではない</button></div></li>`}
 let XR={};
-// ── 範囲の木（#10）：変更は下書きにためて、1つの変更リクエストとして出す ──
-let RS={},RSEL={},DRAFT={};
-const dKey=r=>'idea-flow-draft:'+r;
-function loadDraftOps(r){try{return JSON.parse(localStorage.getItem(dKey(r))||'[]')}catch(e){return[]}}
-function saveDraftOps(r,ops){try{localStorage.setItem(dKey(r),JSON.stringify(ops))}catch(e){}}
-async function loadScopes(repo){RS[repo]=await api('/api/scopes?repo='+encodeURIComponent(repo));if(!DRAFT[repo]){DRAFT[repo]={ops:loadDraftOps(repo),tree:null,preview:[],error:null};await refreshDraft(repo)}}
-async function refreshDraft(r){const D=DRAFT[r];D.error=null;if(!D.ops.length){D.tree=null;D.preview=[];return}
- try{const x=await api('/api/scopes/preview',{method:'POST',body:JSON.stringify({repo:r,ops:D.ops})});D.tree=x.tree;D.preview=x.preview}catch(e){D.error=e.message}}
-async function addDraft(r,ops){DRAFT[r].ops.push(...ops);saveDraftOps(r,DRAFT[r].ops);await refreshDraft(r);if(DRAFT[r].error){const m=DRAFT[r].error;DRAFT[r].ops.splice(-ops.length);saveDraftOps(r,DRAFT[r].ops);await refreshDraft(r);say('下書きに足せませんでした：'+m)}rulesView()}
-const OPJA=o=>({add_scope:`範囲「${o.name}」を${o.parent&&o.parent!=='root'?`「${o.parent}」の下に`:''}作る`,rename_scope:`範囲 ${o.key} の名前を「${o.name}」にする`,move_scope:`範囲 ${o.key} を ${o.parent} の下へ動かす`,remove_scope:`範囲 ${o.key} を消す`,attach:`${o.path} を ${o.scope} に付ける`,detach:`${o.path} を ${o.scope} から外す`,add_exception:`${o.scope} では ${o.path} の「${o.heading}」を使わない${o.why?'（'+o.why+'）':''}`,remove_exception:`${o.scope} の例外（${o.path} の「${o.heading}」）をやめる`}[o.op]||o.op);
-function previewHtml(pv){return(pv||[]).map(p=>`<li style="padding:6px 0"><b>${esc(p.chain.join(' › '))}</b>${p.isNew?' <span class="badge">新しい範囲</span>':''}${p.starts.length?`<small>効き始める：${p.starts.map(esc).join('、')}</small>`:''}${p.stops.length?`<small style="color:var(--red)">効かなくなる：${p.stops.map(esc).join('、')}</small>`:''}${p.newExceptions.length?`<small>使わない部分が増える：${p.newExceptions.map(x=>esc(x.replace('#','の「')+'」')).join('、')}</small>`:''}${p.droppedExceptions.length?`<small>使わない部分がなくなる：${p.droppedExceptions.map(x=>esc(x.replace('#','の「')+'」')).join('、')}</small>`:''}</li>`).join('')}
-function scopesHtml(r){const S=RS[r],D=DRAFT[r];if(!S||!D)return'<p class="sub">範囲を読み込み中…</p>';const draft=D.ops.length>0,t=draft&&D.tree?D.tree:S.tree,pend=S.requests.filter(x=>x.status==='pending'),sel=RSEL[r],key=r.replace(/[^\w]/g,'_');
- const docs=RV.docs.filter(d=>d.repo===r).map(d=>d.path);
- let h=`<h3 style="color:var(--ink);font-weight:700;margin-top:14px">範囲の木${draft?' <span class="badge k">下書き中</span>':''}</h3><p class="sub">文書を範囲に付けると、その範囲と下の範囲に効き、横の範囲には効きません。操作は下書きにたまり、まとめて1つの変更リクエストとして出します。</p>`;
- if(pend.length)h+=pend.map(q=>`<div style="border:1px solid var(--ink);border-radius:10px;padding:10px 12px;margin-top:10px"><span class="badge${q.by==='ai'?' k':''}">${q.by==='ai'?'Claude からの提案':'承認待ちの変更'}</span> <b>${esc(q.title)}</b>${q.reason?`<p class="sub" style="margin:6px 0">${esc(q.reason)}</p>`:''}
-  <details><summary class="sub" style="cursor:pointer">変更の中身（${q.ops.length}件）</summary><ul style="margin:4px 0;padding-left:18px;font-size:14px">${q.ops.map(o=>`<li>${esc(OPJA(o))}</li>`).join('')}</ul></details>
-  ${q.error?`<p style="color:var(--red);font-size:14px">このままでは反映できません：${esc(q.error)}</p>`:`<p class="sub" style="margin:6px 0 0">承認したら変わること</p><ul class="items">${previewHtml(q.preview)}</ul>`}
-  <div class="row"><input data-crnote="${esc(q.id)}" placeholder="ひと言（任意）" style="flex:1 1 160px"><button class="btn s p" data-cr="${esc(q.id)}" data-d="accept" ${q.error?'disabled':''}>承認</button><button class="btn s" data-cr="${esc(q.id)}" data-d="reject">見送る</button></div></div>`).join('');
- const walk=(pid,d)=>t.filter(s=>s.parent_id===pid).map(s=>`<li style="padding:0;border-top:1px solid var(--line)"><button data-scope="${esc(r)}|${esc(s.key)}" style="display:flex;width:100%;min-height:44px;align-items:center;gap:8px;background:${sel===s.key?'var(--soft)':'none'};border:0;color:inherit;font:inherit;text-align:left;padding:6px 4px 6px ${6+d*18}px;cursor:pointer"><span style="flex:1;font-weight:${d?400:700}">${d?'└ ':''}${esc(s.name)}</span><span class="badge">文書 ${s.docs.length}</span>${s.exceptions.length?`<span class="badge">例外 ${s.exceptions.length}</span>`:''}</button></li>${walk(s.id,d+1)}`).join('');
- h+=t.length?`<ul class="items" style="margin-top:8px">${walk(null,0)}</ul>`:`<p style="margin-top:8px">範囲の木はまだありません。</p>`;
- if(!draft&&!pend.length)h+=`<div class="row"><button class="btn s p" data-scsuggest="${esc(r)}">木の案を作る（下書きに入れる）</button></div><p class="sub" style="margin-top:4px">参照のつながりとスキルの名前から、たたき台を作ります。直してから出せます。</p>`;
- const s=sel&&t.find(x=>x.key===sel);
- if(s){const others=t.filter(x=>x.id!==s.id);h+=`<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px"><b>${esc(s.name)}</b> <span class="sub">key=${esc(s.key)}</span>
-  ${s.key!=='root'?`<div class="row"><input id="rn-${key}" value="${esc(s.name)}" style="flex:1 1 160px"><button class="btn s" data-scren="${esc(r)}">名前を変える</button></div>
-  <div class="row"><select id="mv-${key}" style="flex:1 1 160px"><option value="">親を選ぶ…</option>${others.map(o=>`<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('')}</select><button class="btn s" data-scmove="${esc(r)}">この下へ動かす</button>${t.some(x=>x.parent_id===s.id)?'':`<button class="btn s" data-scdel="${esc(r)}">範囲を消す</button>`}</div>`:''}
-  <p class="sub" style="margin:10px 0 2px">付けた文書</p>${s.docs.map(p=>`<div class="row" style="margin:2px 0;justify-content:space-between"><span style="font-size:14px">${esc(p)}</span><button class="btn s" data-scop="${esc(JSON.stringify({_repo:r,op:'detach',scope:s.key,path:p}))}">外す</button></div>`).join('')||'<p class="sub">なし</p>'}
-  <details style="margin-top:6px"><summary class="sub" style="cursor:pointer;min-height:36px">文書をまとめて付ける</summary><div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:4px 10px;margin-top:4px">${docs.filter(p=>!s.docs.includes(p)).map(p=>`<label style="display:flex;gap:8px;align-items:center;min-height:36px;font-size:14px"><input type="checkbox" data-scpick="${esc(p)}" style="width:auto"> ${esc(p)}</label>`).join('')}</div><div class="row"><button class="btn s" data-scbulk="${esc(r)}">選んだ文書を付ける</button></div></details>
-  <p class="sub" style="margin:10px 0 2px">この範囲（と下）では使わない部分（例外）</p>${s.exceptions.map(e=>`<div class="row" style="margin:2px 0;justify-content:space-between"><span style="font-size:14px">${esc(e.path)} の「${esc(e.heading)}」${e.why?'<small>'+esc(e.why)+'</small>':''}</span><button class="btn s" data-scop="${esc(JSON.stringify({_repo:r,op:'remove_exception',scope:s.key,path:e.path,heading:e.heading}))}">やめる</button></div>`).join('')||'<p class="sub">なし</p>'}
-  <details style="margin-top:6px"><summary class="sub" style="cursor:pointer;min-height:36px">例外を足す</summary><div class="row"><select id="se-${key}" style="flex:1 1 180px"><option value="">文書を選ぶ…</option>${docs.map(p=>`<option>${esc(p)}</option>`).join('')}</select><input id="sh-${key}" placeholder="見出し（例：2. 色）" style="flex:1 1 140px"><input id="sw-${key}" placeholder="理由" style="flex:1 1 140px"><button class="btn s" data-scex="${esc(r)}">例外にする</button></div></details>
-  <div class="row"><input id="sn-${key}" placeholder="この下に足す範囲の名前" style="flex:1 1 180px"><button class="btn s" data-scnew="${esc(r)}">範囲を足す</button></div>
-  ${draft?'':`<details style="margin-top:8px" data-sccontract="${esc(r)}|${esc(s.key)}"><summary class="sub" style="cursor:pointer;min-height:36px">この範囲で Claude に渡す内容</summary><div class="contract" style="white-space:pre-wrap;font-size:13px;background:var(--soft);border-radius:10px;padding:10px;margin-top:6px">読み込み中…</div></details>`}</div>`}
- else if(!t.length)h+=`<div class="row"><input id="sn-${key}" placeholder="最初の範囲の名前（例：画面）" style="flex:1 1 180px"><button class="btn s" data-scnew="${esc(r)}">範囲を足す</button></div>`;
- if(draft)h+=`<div style="border:2px solid var(--ink);border-radius:10px;padding:10px 12px;margin-top:10px"><b>下書き（${D.ops.length}件）</b>${D.error?`<p style="color:var(--red);font-size:14px">${esc(D.error)}</p>`:''}
-  <details><summary class="sub" style="cursor:pointer;min-height:36px">操作の一覧</summary>${D.ops.map((o,i)=>`<div class="row" style="margin:2px 0;justify-content:space-between"><span style="font-size:13px">${esc(OPJA(o))}</span><button class="btn s" data-drdel="${esc(r)}|${i}" aria-label="取り消す">×</button></div>`).join('')}</details>
-  <p class="sub" style="margin:6px 0 0">出したら変わること</p><ul class="items">${previewHtml(D.preview)}</ul>
-  <input id="dt-${key}" placeholder="題（例：最初の範囲の木）" style="margin-top:6px"><textarea id="dr-${key}" rows="2" placeholder="理由・相談した内容" style="width:100%;font:inherit;font-size:16px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);margin-top:6px"></textarea>
-  <div class="row"><button class="btn s p" data-drsend="${esc(r)}">変更リクエストにする</button><button class="btn s" data-drdrop="${esc(r)}">下書きを捨てる</button></div></div>`;
- return h}
+// 範囲の木は board.js（範囲のボード）。ここではレントゲンの範囲の選択にだけ使う
+let RS={};
+async function loadScopes(repo){RS[repo]=await api('/api/scopes?repo='+encodeURIComponent(repo))}
 const clip=(t,n=70)=>t.length>n?`<details><summary style="cursor:pointer;list-style:none">${esc(t.slice(0,n))}… <span class="sub">全文</span></summary>${esc(t)}</details>`:esc(t);
 function xrayHtml(x){const sec=(cls,t,body)=>`<div style="border:1px solid var(--line);border-left:4px solid ${cls};border-radius:0;padding:8px 10px;margin-top:8px"><b>${t}</b><div style="margin-top:4px;font-size:14px">${body}</div></div>`;
  const likely=x.skills.filter(s=>s.likely),rest=x.skills.filter(s=>!s.likely),sk=s=>`<div>${s.likely?'◎ ':'・ '}${esc(s.title||s.path)} <span class="sub">近さ ${s.score}${s.external?'・外から入れたもの':''}</span></div>`;
@@ -232,12 +197,17 @@ function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">�
   ${d.description?`<p class="sub" style="margin-top:6px">呼ばれる場面（説明文）：${esc(d.description)}</p>`:''}
   ${Object.entries(byH).map(([h,xs])=>`<h3>${esc(h)}</h3>${xs.map(i=>{const f=RV.findings.filter(x=>x.a===i.id||x.b===i.id);return`<div class="rule" style="padding:6px 0">${esc(i.text)}${f.map(x=>` <span class="badge r">${FK[x.kind]}</span>`).join('')}<small><a href="${esc(ghLink(d,i.line))}" target="_blank" rel="noopener">${i.line}行目</a></small></div>`}).join('')}`).join('')}`;return}
  const repos=[...new Set([...RV.sources.map(s=>s.repo),...RV.docs.map(d=>d.repo)])];
- el.innerHTML=`<h2>決まりの診断</h2><p class="sub">リポジトリの決まり（CLAUDE.md・スキル・docs など）が Claude にちゃんと届いているか、ぶつかっていないかを見ます。読むだけで、GitHub には書き込みません。</p>
+ if(!RREPO||!repos.includes(RREPO))RREPO=repos.find(x=>RV.docs.some(d=>d.repo===x))||repos[0]||'';
+ const head=`<div class="row" style="margin:0">${repos.length>1?`<select id="rrepo" style="flex:1 1 200px" aria-label="リポジトリ">${repos.map(x=>`<option ${x===RREPO?'selected':''}>${esc(x)}</option>`).join('')}</select>`:`<b>${esc(RREPO||'リポジトリはまだありません')}</b>`}</div>
+ <div class="tabs" role="tablist" style="margin-top:8px">${[['board','範囲'],['diag','診断'],['xray','レントゲン']].map(([k,l])=>`<button class="tab" role="tab" data-rsub="${k}" aria-selected="${RSUB===k}">${l}</button>`).join('')}</div>`;
+ if(RSUB==='board'&&RREPO){el.innerHTML=head+'<div id="rboard" style="margin-top:10px"></div>';window.Board.render($('#rboard'),RREPO);return}
+ if(RSUB==='xray'&&RREPO){const r=RREPO,ds=RV.docs.filter(d=>d.repo===r),key=r.replace(/[^\w]/g,'_');
+  el.innerHTML=head+`<h2 style="margin-top:12px">場面のレントゲン</h2><p class="sub">ある場面（例：予報ビューに比較表を足す）で、Claude に何が届いて、何が届かないかを見ます。</p>
+  ${ds.length?`<div style="margin-top:8px"><div class="row" style="margin:0"><input id="xs-${key}" placeholder="場面（例：予報ビューに比較表を足す）" value="${esc((XR[r]||{}).scene||'')}" style="flex:1 1 200px">${RS[r]&&RS[r].tree.length?`<select id="xsc-${key}" style="flex:1 1 140px"><option value="">範囲を選ばない</option>${RS[r].tree.map(t=>`<option value="${esc(t.key)}" ${(XR[r]||{}).scope&&XR[r].scope.key===t.key?'selected':''}>${esc(t.name)}</option>`).join('')}</select>`:''}<button class="btn s p" data-xray="${esc(r)}">レントゲン</button></div><p id="xm-${key}" style="margin:6px 0 0;font-size:14px;color:var(--red)" aria-live="polite"></p>${XR[r]?xrayHtml(XR[r]):''}</div>`:''}`;return}
+ el.innerHTML=head+`<h2 style="margin-top:12px">決まりの診断</h2><p class="sub">リポジトリの決まり（CLAUDE.md・スキル・docs など）が Claude にちゃんと届いているか、ぶつかっていないかを見ます。読むだけで、GitHub には書き込みません。</p>
  ${RV.stale?`<div style="border:1px solid var(--red);border-radius:10px;padding:10px 12px;margin-top:10px"><b>診断の仕方が新しくなりました</b><p class="sub" style="margin:4px 0">下の結果は古い仕方のままです。取り込み直すと新しい診断になります。</p><div class="row">${[...new Set(RV.docs.map(d=>d.repo))].map(r=>`<button class="btn s p" data-rsync="${esc(r)}">${esc(r.split('/')[1])} を取り込み直す</button>`).join('')}</div></div>`:''}
- ${repos.map(r=>{const s=RV.sources.find(x=>x.repo===r),ds=RV.docs.filter(d=>d.repo===r),dg=RV.diagnosis[r]||{conclusions:[],external:[]};const key=r.replace(/[^\w]/g,'_');
+ ${repos.filter(x=>x===RREPO||!RREPO).map(r=>{const s=RV.sources.find(x=>x.repo===r),ds=RV.docs.filter(d=>d.repo===r),dg=RV.diagnosis[r]||{conclusions:[],external:[]};const key=r.replace(/[^\w]/g,'_');
   return`<div class="card" style="margin-top:14px;padding:12px"><div class="row" style="margin:0;justify-content:space-between"><b>${esc(r)}</b><span class="sub">${s&&s.synced_at?esc(s.synced_at.slice(0,10)):'未取り込み'}</span></div>
-  ${ds.length?`<div style="margin-top:8px"><div class="row" style="margin:0"><input id="xs-${key}" placeholder="場面（例：予報ビューに比較表を足す）" value="${esc((XR[r]||{}).scene||'')}" style="flex:1 1 200px">${RS[r]&&RS[r].tree.length?`<select id="xsc-${key}" style="flex:1 1 140px"><option value="">範囲を選ばない</option>${RS[r].tree.map(t=>`<option value="${esc(t.key)}" ${(XR[r]||{}).scope&&XR[r].scope.key===t.key?'selected':''}>${esc(t.name)}</option>`).join('')}</select>`:''}<button class="btn s p" data-xray="${esc(r)}">レントゲン</button></div><p id="xm-${key}" style="margin:6px 0 0;font-size:14px;color:var(--red)" aria-live="polite"></p>${XR[r]?xrayHtml(XR[r]):''}</div>`:''}
-  ${ds.length?scopesHtml(r):''}
   ${!ds.length?`<p class="sub" style="margin-top:8px">まだ取り込んでいません。</p>`:dg.conclusions.length?dg.conclusions.map((c,k)=>{const fs=RV.findings.filter(f=>f.kind===c.kind&&fRepo(f)===r),op=ROPEN.has(r+'|'+c.kind);
    return`<div style="border-top:1px solid var(--line);padding:12px 0 8px;margin-top:8px"><p style="margin:0;font-weight:700;font-size:17px">${k+1}. ${esc(c.title)}</p><p style="margin:4px 0" class="sub">${esc(c.why)}</p>${c.list&&c.list.length?`<ul style="margin:4px 0 0;padding-left:18px;font-size:13px;color:var(--mute)">${c.list.slice(0,3).map(l=>`<li>${esc(l)}</li>`).join('')}${c.list.length>3?`<li>ほか ${c.list.length-3}件</li>`:''}</ul>`:''}<p style="margin:6px 0"><span class="badge k">次の一手</span> ${esc(c.next)}</p>
    <button class="btn s" data-ropen="${esc(r+'|'+c.kind)}">${op?'閉じる':'詳しく見る'}</button>${op?`<ul class="items" style="margin-top:6px">${fs.slice(0,40).map(findingHtml).join('')}</ul>${fs.length>40?`<p class="sub">ほか ${fs.length-40}件</p>`:''}`:''}</div>`}).join(''):'<p style="margin-top:8px">問題は見つかっていません。</p>'}
@@ -260,7 +230,7 @@ document.addEventListener('click',e=>{const dd=e.target.closest('[data-rdoc]');i
 document.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){if(!e.target.closest('#pop,[data-dot],a'))closePop();return}
  try{
  if(b.dataset.close)return closePop();
- if(b.classList.contains('tab')){VIEW=b.dataset.v;view();return}
+ if(b.classList.contains('tab')&&b.dataset.v){VIEW=b.dataset.v;view();return}
  if(b.id==='saveTok'){TOK=$('#tok').value.trim();try{localStorage.setItem('idea-flow-token',TOK)}catch(_){}await load();return}
  if(b.id==='openAll'){themeKeys().forEach(c=>open.add(c));draw();return}if(b.id==='closeAll'){open.clear();draw();return}
  if(b.id==='sync'){b.disabled=true;say('Linear と GitHub から取り込み、埋め込みと提案を計算しています…');const r=await api('/api/sync',{method:'POST'});
@@ -271,19 +241,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
   if(!inp.value.trim()){msg.textContent='場面を入れてください（例：満月の物語のページ送りに動きを付ける）';inp.focus();return}
   b.disabled=true;b.textContent='調べています…';
   try{const sc=$('#xsc-'+k);XR[r]=await api('/api/rules/xray?repo='+encodeURIComponent(r)+'&scene='+encodeURIComponent(inp.value)+(sc&&sc.value?'&scope='+encodeURIComponent(sc.value):''));rulesView()}catch(err){msg.textContent='調べられませんでした：'+err.message;b.disabled=false;b.textContent='レントゲン'}return}
- if(b.dataset.scope){const [repo,k]=b.dataset.scope.split('|');RSEL[repo]=RSEL[repo]===k?null:k;rulesView();return}
- if(b.dataset.cr){b.disabled=true;const n=document.querySelector(`[data-crnote="${CSS.escape(b.dataset.cr)}"]`);await api('/api/scopes/decide',{method:'POST',body:JSON.stringify({id:b.dataset.cr,decision:b.dataset.d,note:n?n.value:''})});for(const r of Object.keys(RS))await loadScopes(r);rulesView();say(b.dataset.d==='accept'?'承認して反映しました':'見送りました');return}
- if(b.dataset.scop){const o=JSON.parse(b.dataset.scop),repo=o._repo;delete o._repo;await addDraft(repo,[o]);return}
- if(b.dataset.scsuggest){const r=b.dataset.scsuggest;b.disabled=true;b.textContent='案を作っています…';const x=await api('/api/scopes/suggest',{method:'POST',body:JSON.stringify({repo:r})});DRAFT[r].ops=[];await addDraft(r,x.ops);say('木の案を下書きに入れました。範囲を押して、名前・場所・文書を直してください');return}
- if(b.dataset.scbulk){const r=b.dataset.scbulk,ps=[...document.querySelectorAll('[data-scpick]')].filter(x=>x.checked).map(x=>x.dataset.scpick);if(!ps.length)return say('文書を選んでください');await addDraft(r,ps.map(p=>({op:'attach',scope:RSEL[r],path:p})));return}
- if(b.dataset.scex){const r=b.dataset.scex,k=r.replace(/[^\w]/g,'_'),p=$('#se-'+k).value,hd=$('#sh-'+k).value.trim();if(!p||!hd)return say('文書と見出しを入れてください');await addDraft(r,[{op:'add_exception',scope:RSEL[r],path:p,heading:hd,why:$('#sw-'+k).value}]);return}
- if(b.dataset.scnew){const r=b.dataset.scnew,k=r.replace(/[^\w]/g,'_'),name=$('#sn-'+k).value.trim();if(!name)return say('範囲の名前を入れてください');const key='s'+Date.now().toString(36);await addDraft(r,[{op:'add_scope',key,name,parent:RSEL[r]||'root'}]);return}
- if(b.dataset.scren){const r=b.dataset.scren,k=r.replace(/[^\w]/g,'_'),name=$('#rn-'+k).value.trim();if(!name)return;await addDraft(r,[{op:'rename_scope',key:RSEL[r],name}]);return}
- if(b.dataset.scmove){const r=b.dataset.scmove,k=r.replace(/[^\w]/g,'_'),p=$('#mv-'+k).value;if(!p)return say('親を選んでください');await addDraft(r,[{op:'move_scope',key:RSEL[r],parent:p}]);return}
- if(b.dataset.scdel){const r=b.dataset.scdel,k=RSEL[r];RSEL[r]=null;await addDraft(r,[{op:'remove_scope',key:k}]);return}
- if(b.dataset.drdel){const [r,i]=[b.dataset.drdel.slice(0,b.dataset.drdel.lastIndexOf('|')),+b.dataset.drdel.split('|').pop()];DRAFT[r].ops.splice(i,1);saveDraftOps(r,DRAFT[r].ops);await refreshDraft(r);rulesView();return}
- if(b.dataset.drdrop){const r=b.dataset.drdrop;DRAFT[r].ops=[];saveDraftOps(r,[]);await refreshDraft(r);RSEL[r]=null;rulesView();say('下書きを捨てました');return}
- if(b.dataset.drsend){const r=b.dataset.drsend,k=r.replace(/[^\w]/g,'_');b.disabled=true;await api('/api/scopes/propose',{method:'POST',body:JSON.stringify({repo:r,title:$('#dt-'+k).value.trim()||'範囲の変更',reason:$('#dr-'+k).value,ops:DRAFT[r].ops})});DRAFT[r].ops=[];saveDraftOps(r,[]);await refreshDraft(r);await loadScopes(r);rulesView();say('変更リクエストにしました。中身を確かめて「承認」すると反映されます');return}
+ if(b.dataset.rsub){RSUB=b.dataset.rsub;rulesView();return}
  if(b.dataset.ropen){const k=b.dataset.ropen;ROPEN.has(k)?ROPEN.delete(k):ROPEN.add(k);rulesView();return}
  if(b.dataset.rext){const [repo,...pp]=b.dataset.rext.split('|');b.disabled=true;await api('/api/rules/external',{method:'POST',body:JSON.stringify({repo,path:pp.join('|'),external:b.dataset.v2==='1'})});await loadRules();say('変えました（次の取り込みからも効きます）');return}
  if(b.dataset.rfiles){await pickFiles(b.dataset.rfiles);return}
@@ -298,12 +256,14 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.id==='unskip'){PSKIP.clear();plist();return}
  if(b.dataset.per){PER=+b.dataset.per;try{localStorage.setItem('idea-flow-per',PER)}catch(_){}index();segs();closePop();draw();return}
  }catch(err){say(err.message);b.disabled=false}});
-document.addEventListener('toggle',async e=>{const d=e.target;if(!d.dataset||!d.dataset.sccontract||!d.open)return;const [repo,k]=d.dataset.sccontract.split('|');const el=d.querySelector('.contract');try{const c=await api('/api/scopes/contract?repo='+encodeURIComponent(repo)+'&scope='+encodeURIComponent(k));el.textContent=c.text}catch(err){el.textContent=err.message}},true);
 document.addEventListener('change',async e=>{const t=e.target;if(!t.dataset||!t.dataset.assign||!t.value)return;t.disabled=true;
  try{await api('/api/assign',{method:'POST',body:JSON.stringify({sha:t.dataset.assign,theme:t.value})});await api('/api/decide',{method:'POST',body:JSON.stringify({id:t.dataset.id,decision:'reject'})});settle(t.dataset.id)}catch(err){say(err.message);t.disabled=false}});
 function segs(){document.querySelectorAll('[data-per]').forEach(b=>b.setAttribute('aria-pressed',+b.dataset.per===PER))}
 try{const v=+localStorage.getItem('idea-flow-per');if([14,35,91].includes(v))PER=v}catch(_){}segs();
 const ro=new ResizeObserver(()=>draw());ro.observe(fig);
+document.addEventListener('change',e=>{if(e.target.id==='rrepo'){RREPO=e.target.value;rulesView()}});
+// 範囲のボード（board.js）へ渡すもの
+window.IF={api,esc,say,rv:()=>RV,reload:()=>loadRules(),files:r=>pickFiles(r)};
 if(!TOK)$('#gate').hidden=false;else load();
 }
-</script></body></html>
+</script><script src="board.js"></script></body></html>
