@@ -44,10 +44,13 @@ test('MCP：合言葉・初期化・道具・読むだけの道具で見える�
     await saveSource(env, 'o/r', Object.keys(files));
     await syncRules(env, 'o/r');
     const ov = (await call(env, 'rules_overview')).content[0].text;
-    assert.match(ov, /自動で読まれる文書（CLAUDE.md・AGENTS.md）が無い/);
-    assert.match(ov, /docs\/design.md［参照されたときだけ］決まり 2/);
+    assert.match(ov, /1\. 決まりが Claude に自動では届いていません/);
+    assert.match(ov, /次の一手：/);
+    assert.ok(!/docs\/design.md［/.test(ov), '文書の一覧は docs=true のときだけ');
+    assert.match((await call(env, 'rules_overview', { docs: true })).content[0].text, /docs\/design.md［渡さないと届かない］決まり 2/);
+    assert.match((await call(env, 'list_rule_findings', { kind: 'no_entry', repo: 'o/r' })).content[0].text, /渡さないと届かない文書 2件/);
     const fl = (await call(env, 'list_rule_findings', { kind: 'duplicate' })).content[0].text;
-    assert.match(fl, /\[重複\] key=duplicate\|/);
+    assert.match(fl, /\[同じことが2か所\] key=duplicate\|/);
     assert.match(fl, /docs\/story.md:3/);
     const rd = (await call(env, 'read_rule_doc', { repo: 'o/r', path: 'docs/design.md' })).content[0].text;
     assert.match(rd, /## 文字\n3: 文字は Noto Sans JP/);

@@ -4,7 +4,7 @@ import { syncLinear, attachCommit } from './linear.ts';
 import { syncGithub } from './github.ts';
 import { refreshEmbeddings, embedMany, MODEL } from './embed.ts';
 import { errorJson, json, jstDay, newId, nowIso, safeEqual } from './util.ts';
-import { analyze, dismiss, listFiles, rulesView, saveSource, syncRules } from './rules.ts';
+import { analyze, dismiss, listFiles, rulesView, saveSource, setExternal, syncRules } from './rules.ts';
 
 const isAdmin = (req: Request, env: Env) => {
   const h = req.headers.get('authorization') ?? '';
@@ -126,6 +126,7 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       if (p === '/api/rules/source') return json(await saveSource(env, String(body.repo ?? ''), Array.isArray(body.files) ? body.files as string[] : []));
       if (p === '/api/rules/sync') return json(await syncRules(env, String(body.repo ?? '')));
       if (p === '/api/rules/analyze') return json(await analyze(env));
+      if (p === '/api/rules/external') return json(await setExternal(env, String(body.repo ?? ''), String(body.path ?? ''), !!body.external));
       if (p === '/api/rules/dismiss') return json(await dismiss(env, String(body.key ?? ''), body.why ? String(body.why).slice(0, 200) : null));
     }
     return errorJson('見つかりません', 404);

@@ -156,45 +156,43 @@ async function sets(){const st=await api('/api/settings');
  <div style="display:grid;grid-template-columns:1fr 110px;gap:6px 10px;align-items:center;margin-top:8px">${SETS.map(([k,l])=>`<label for="s-${k}" style="font-size:14px">${l}${k.endsWith('auto')&&st[k]>1?' <small style="display:inline">（なし）</small>':''}</label><input id="s-${k}" type="number" inputmode="decimal" step="0.05" min="0" max="1.01" value="${st[k]}">`).join('')}</div>
  <div class="row"><button class="btn p" id="saveSets">保存して提案を作り直す</button></div>`}
 async function saveSets(b){await api('/api/settings',{method:'POST',body:JSON.stringify(b)});say('しきい値を保存しました。提案を計算し直します…');const r=await api('/api/suggest',{method:'POST'});await load();await sets();say(`計算し直しました（課題 ${r.commitIssue}・テーマ ${r.commitTheme}・新しい塊 ${r.newClusters}）`)}
-// ── 決まりの見える化（#8） ──
-let RV=null,RDOC=null,RF='all';
-const APPLIES={always:'自動で読まれる',role:'役割として読まれる',skill:'説明文で読まれる（スキル）',referenced:'参照されたときだけ'};
-const FK={duplicate:'重複',definition:'定義が分かれている',conflict:'食い違いの候補',temporary:'一時的な決まりの残り',skill_overlap:'読み込まれ方が重なるスキル',unreferenced:'どこからも読まれない文書'};
-const FHELP={duplicate:'別の文書に、ほぼ同じ決まりがある。直すとき片方だけ変わる危険',definition:'同じ言葉を別々の文書で説明している。片方だけ直すと意味がずれる',conflict:'近い話題で、片方だけが「しない」と言っている。人が確かめる',temporary:'「今回」「当面」などを含む。工程が終わったのに残っていないか（気象の「暫定」などドメインの言葉にも当たる）',skill_overlap:'説明文が似ていて、間違った場面で読まれやすい',unreferenced:'CLAUDE.md など自動で読まれる文書からたどれない。会話で渡さない限り効かない'};
+// ── 決まりの診断（#7・#8） ──
+let RV=null,RDOC=null,ROPEN=new Set();
+const APPLIES={always:'自動で届く',role:'役割として届く',skill:'場面に合えば届く（スキル）',referenced:'渡さないと届かない'};
+const FK={no_entry:'入口が無い',unreferenced:'入口からたどれない',duplicate:'同じことが2か所',definition:'同じ言葉を2か所で説明',conflict:'食い違いかもしれない',temporary:'終わったかもしれない',skill_overlap:'似た場面で呼ばれるスキル'};
 async function loadRules(){RV=await api('/api/rules');rulesView()}
 const ritem=id=>RV.items.find(i=>i.id===id),rdoc=id=>RV.docs.find(d=>d.id===id);
 const ghLink=(d,line)=>{const s=RV.sources.find(x=>x.repo===d.repo);return`https://github.com/${d.repo}/blob/${s?s.branch:'main'}/${d.path}${line?'#L'+line:''}`};
-function ruleCard(it){const d=rdoc(it.doc);return`<div class="rule" style="padding:8px 0"><p style="margin:0">${esc(it.text)}</p><small>${esc(d.path)} ${it.heading?'› '+esc(it.heading):''} ・ <a href="${esc(ghLink(d,it.line))}" target="_blank" rel="noopener">${it.line}行目</a></small>
- <div class="row" style="margin-top:4px;gap:4px"><span class="badge">範囲：${esc(d.scope||'リポジトリ全体')}</span><span class="badge">${APPLIES[d.applies]}</span><span class="badge">寿命：未分類</span></div></div>`}
+const fRepo=f=>{const d=rdoc(f.a)||rdoc((ritem(f.a)||{}).doc);return d?d.repo:(f.a.endsWith('|')?f.a.slice(0,-1):null)};
+function ruleCard(it){const d=rdoc(it.doc);return`<div style="padding:6px 0"><p style="margin:0">${esc(it.text)}</p><small>${esc(d.path)}${it.heading?' › '+esc(it.heading):''} ・ <a href="${esc(ghLink(d,it.line))}" target="_blank" rel="noopener">${it.line}行目</a></small></div>`}
+function findingHtml(f){let body='';
+ if(f.kind==='no_entry'){body=`<p style="margin:4px 0">渡さないと届かない文書：${f.detail.docs.map(esc).join('、')}</p>${(f.detail.candidates||[]).map(c=>`<p style="margin:4px 0"><b>入口の候補：${esc(c.path)}</b><small>ここを入口から読ませると、参照をたどって ${c.reaches.map(esc).join('、')} にも届く</small></p>`).join('')}<p class="sub" style="margin:4px 0">候補は「ほかから参照されている数（まとめ役かどうか）」と「届く数」で選んでいます。入口にした文書の決まりはリポジトリ全体に効くので、全体に効いてよい中身かを確かめてください。</p>`}
+ else if(f.kind==='unreferenced'){const d=rdoc(f.a);body=`<b>${esc(d.path)}</b><small>${f.detail.from&&f.detail.from.length?'参照しているのは '+f.detail.from.map(esc).join('、')+'（どれも入口から届かない）':'どの文書からも参照されていない'}</small>`}
+ else if(f.kind==='skill_overlap'){const a=rdoc(f.a),b=rdoc(f.b);body=`<b>${esc(a.title||a.path)}</b> と <b>${esc(b.title||b.path)}</b><small>説明文の近さ ${(+f.score).toFixed(2)}</small>`}
+ else{const A=ritem(f.a),B=f.b?ritem(f.b):null;body=`${A?ruleCard(A):''}${B?`<p class="sub" style="margin:2px 0">↕ ${f.kind==='duplicate'?'ほぼ同じ':'近い'}（近さ ${(+f.score).toFixed(2)}）</p>${ruleCard(B)}`:''}${f.kind==='temporary'?`<small>当たった言葉：「${esc(f.detail.word)}」</small>`:''}${f.kind==='definition'?`<small>同じ言葉：${f.detail.terms.map(esc).join('、')}</small>`:''}`}
+ return`<li>${body}<div class="row"><input data-why="${esc(f.key)}" placeholder="理由（任意）" style="flex:1 1 160px"><button class="btn s" data-dismiss="${esc(f.key)}">問題ではない</button></div></li>`}
 function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">読み込み中…</p>';return}
- if(RDOC){const d=rdoc(RDOC);if(!d){RDOC=null;return rulesView()}const its=RV.items.filter(i=>i.doc===d.id),fs=RV.findings.filter(f=>f.a===d.id||f.b===d.id||its.some(i=>i.id===f.a||i.id===f.b));
+ if(RDOC){const d=rdoc(RDOC);if(!d){RDOC=null;return rulesView()}const its=RV.items.filter(i=>i.doc===d.id);
   const byH={};its.forEach(i=>(byH[i.heading||'（見出しなし）']=byH[i.heading||'（見出しなし）']||[]).push(i));
-  el.innerHTML=`<div class="row" style="margin:0"><button class="btn" data-rback="1">← 一覧</button></div><h2 style="margin-top:10px">${esc(d.title||d.path)}</h2><p class="sub">${esc(d.repo)} / <a href="${esc(ghLink(d))}" target="_blank" rel="noopener">${esc(d.path)}</a></p>
-  <div class="row" style="gap:4px"><span class="badge">範囲：${esc(d.scope||'リポジトリ全体')}</span><span class="badge${d.applies==='referenced'?'':' k'}">${APPLIES[d.applies]}</span><span class="badge">決まり ${its.length}</span>${fs.length?`<span class="badge r">問題 ${fs.length}</span>`:''}</div>
-  ${d.description?`<p class="sub" style="margin-top:8px">説明文：${esc(d.description)}</p>`:''}${d.refs.length?`<p class="sub" style="margin-top:6px">参照している文書：${d.refs.map(esc).join('、')}</p>`:''}
+  el.innerHTML=`<div class="row" style="margin:0"><button class="btn" data-rback="1">← 診断に戻る</button></div><h2 style="margin-top:10px">${esc(d.title||d.path)}</h2><p class="sub"><a href="${esc(ghLink(d))}" target="_blank" rel="noopener">${esc(d.path)}</a>・${APPLIES[d.applies]}・決まり ${its.length}${d.external?'・外から入れたもの':''}</p>
+  ${d.description?`<p class="sub" style="margin-top:6px">呼ばれる場面（説明文）：${esc(d.description)}</p>`:''}
   ${Object.entries(byH).map(([h,xs])=>`<h3>${esc(h)}</h3>${xs.map(i=>{const f=RV.findings.filter(x=>x.a===i.id||x.b===i.id);return`<div class="rule" style="padding:6px 0">${esc(i.text)}${f.map(x=>` <span class="badge r">${FK[x.kind]}</span>`).join('')}<small><a href="${esc(ghLink(d,i.line))}" target="_blank" rel="noopener">${i.line}行目</a></small></div>`}).join('')}`).join('')}`;return}
- const cnt={};RV.findings.forEach(f=>cnt[f.kind]=(cnt[f.kind]||0)+1);
  const repos=[...new Set([...RV.sources.map(s=>s.repo),...RV.docs.map(d=>d.repo)])];
- const fl=RV.findings.filter(f=>RF==='all'||f.kind===RF);
- el.innerHTML=`<h2>決まりの見える化</h2><p class="sub">リポジトリの CLAUDE.md・ROLE.md・SKILL.md・決まりの文書を読むだけ（GitHub には書き込まない）。寿命はまだ誰も決めていないので、すべて「未分類」。</p>
- ${repos.map(r=>{const s=RV.sources.find(x=>x.repo===r),ds=RV.docs.filter(d=>d.repo===r),auto=ds.some(d=>d.applies==='always');
-  const dirs={};ds.forEach(d=>(dirs[d.scope.split('/')[0]||'（リポジトリ直下）']=dirs[d.scope.split('/')[0]||'（リポジトリ直下）']||[]).push(d));
-  return`<h3 style="color:var(--ink);font-weight:700">${esc(r)}</h3><small>${s&&s.synced_at?'取り込み '+esc(s.synced_at.slice(0,16).replace('T',' ')):'まだ取り込んでいません'}・文書 ${ds.length}・決まり ${RV.items.filter(i=>ds.some(d=>d.id===i.doc)).length}</small>
-  ${ds.length&&!auto?`<p style="margin:6px 0;font-size:14px"><span class="badge r">注意</span> 自動で読まれる文書（CLAUDE.md・AGENTS.md）がありません。ここの決まりは、会話で渡したときにしか効きません。</p>`:''}
-  <div class="row"><button class="btn s" data-rfiles="${esc(r)}">ファイルを選ぶ</button><button class="btn s p" data-rsync="${esc(r)}">取り込む</button></div><div id="rf-${esc(r).replace(/[^\w]/g,'_')}"></div>
-  <ul class="items">${Object.entries(dirs).map(([dn,xs])=>`<li><b>${esc(dn)}/</b>${xs.map(d=>{const n=RV.items.filter(i=>i.doc===d.id).length,f=RV.findings.filter(x=>x.a===d.id||x.b===d.id||RV.items.some(i=>i.doc===d.id&&(i.id===x.a||i.id===x.b))).length;
-   return`<div data-rdoc="${esc(d.id)}" style="cursor:pointer;padding:8px 0 4px 12px"><span>${esc(d.path.split('/').pop())}</span> <small style="display:inline">${esc(d.path)}</small><div class="row" style="margin-top:2px;gap:4px"><span class="badge${d.applies==='referenced'?'':' k'}">${APPLIES[d.applies]}</span><span class="badge">決まり ${n}</span>${f?`<span class="badge r">問題 ${f}</span>`:''}</div></div>`}).join('')}</li>`).join('')}</ul>`}).join('')}
+ el.innerHTML=`<h2>決まりの診断</h2><p class="sub">リポジトリの決まり（CLAUDE.md・スキル・docs など）が Claude にちゃんと届いているか、ぶつかっていないかを見ます。読むだけで、GitHub には書き込みません。</p>
+ ${repos.map(r=>{const s=RV.sources.find(x=>x.repo===r),ds=RV.docs.filter(d=>d.repo===r),dg=RV.diagnosis[r]||{conclusions:[],external:[]};const key=r.replace(/[^\w]/g,'_');
+  return`<div class="card" style="margin-top:14px;padding:12px"><div class="row" style="margin:0;justify-content:space-between"><b>${esc(r)}</b><span class="sub">${s&&s.synced_at?esc(s.synced_at.slice(0,10)):'未取り込み'}</span></div>
+  ${!ds.length?`<p class="sub" style="margin-top:8px">まだ取り込んでいません。</p>`:dg.conclusions.length?dg.conclusions.map((c,k)=>{const fs=RV.findings.filter(f=>f.kind===c.kind&&fRepo(f)===r),op=ROPEN.has(r+'|'+c.kind);
+   return`<div style="border-top:1px solid var(--line);padding:12px 0 8px;margin-top:8px"><p style="margin:0;font-weight:700;font-size:17px">${k+1}. ${esc(c.title)}</p><p style="margin:4px 0" class="sub">${esc(c.why)}</p><p style="margin:6px 0"><span class="badge k">次の一手</span> ${esc(c.next)}</p>
+   <button class="btn s" data-ropen="${esc(r+'|'+c.kind)}">${op?'閉じる':'詳しく見る'}</button>${op?`<ul class="items" style="margin-top:6px">${fs.slice(0,40).map(findingHtml).join('')}</ul>${fs.length>40?`<p class="sub">ほか ${fs.length-40}件</p>`:''}`:''}</div>`}).join(''):'<p style="margin-top:8px">問題は見つかっていません。</p>'}
+  ${dg.external.length?`<p class="sub" style="margin-top:10px">外から入れた決まり ${dg.external.length}件（書き換えないもの）は診断から外しています。</p>`:''}
+  <details style="margin-top:10px"><summary class="sub" style="cursor:pointer;min-height:36px">文書の一覧（${ds.length}件）・取り込みの設定</summary>
+   <div class="row"><button class="btn s" data-rfiles="${esc(r)}">ファイルを選ぶ</button><button class="btn s p" data-rsync="${esc(r)}">取り込む</button></div><div id="rf-${key}"></div>
+   <ul class="items">${ds.map(d=>`<li><div data-rdoc="${esc(d.id)}" style="cursor:pointer">${esc(d.path)}<small>${APPLIES[d.applies]}・決まり ${RV.items.filter(i=>i.doc===d.id).length}${d.external?`・外から入れたもの${d.external_by==='auto'?'（ライセンスのファイルから判定）':''}`:''}</small></div><div class="row" style="margin-top:4px"><button class="btn s" data-rext="${esc(d.repo+'|'+d.path)}" data-v2="${d.external?0:1}">${d.external?'このリポジトリの決まりとして扱う':'外から入れたもの（診断しない）にする'}</button></div></li>`).join('')}</ul>
+  </details></div>`}).join('')}
  <div class="row"><input id="newrepo" placeholder="owner/name を足す" style="flex:1 1 180px"><button class="btn s" id="addrepo">足す</button></div>
- <h3 style="color:var(--ink);font-weight:700;margin-top:20px">見つかった問題</h3>
- <div class="row" style="gap:6px"><button class="btn s${RF==='all'?' p':''}" data-rf="all">すべて ${RV.findings.length}</button>${Object.keys(FK).map(k=>`<button class="btn s${RF===k?' p':''}" data-rf="${k}">${FK[k]} ${cnt[k]||0}</button>`).join('')}</div>
- ${RF!=='all'?`<p class="sub" style="margin-top:8px">${FHELP[RF]}</p>`:''}${RV.dismissed?`<p class="sub" style="margin-top:4px">「問題ではない」にしたもの ${RV.dismissed}件は出していません。</p>`:''}
- <ul class="items">${fl.slice(0,60).map(f=>{const A=f.kind==='skill_overlap'||f.kind==='unreferenced'?null:ritem(f.a),B=f.b&&f.kind!=='skill_overlap'?ritem(f.b):null;
-  let body='';if(f.kind==='unreferenced'){const d=rdoc(f.a);body=`<b>${esc(d.path)}</b>（決まり ${RV.items.filter(i=>i.doc===d.id).length}）<small>${f.detail.from&&f.detail.from.length?'参照しているのは '+f.detail.from.map(esc).join('、')+'（どちらも自動では読まれない）':'どの文書からも参照されていない'}</small>`}
-  else if(f.kind==='skill_overlap'){const a=rdoc(f.a),b=rdoc(f.b);body=`<b>${esc(a.title||a.path)}</b> と <b>${esc(b.title||b.path)}</b><small>説明文の近さ ${(+f.score).toFixed(2)}</small>`}
-  else body=`${A?ruleCard(A):''}${B?`<p class="sub" style="margin:4px 0">↕ 近さ ${(+f.score).toFixed(2)}</p>${ruleCard(B)}`:''}${f.kind==='temporary'?`<small>当たった言葉：「${esc(f.detail.word)}」</small>`:''}${f.kind==='definition'?`<small>同じ言葉：${f.detail.terms.map(esc).join('、')}</small>`:''}`;
-  return`<li><span class="badge r">${FK[f.kind]}</span>${body}<div class="row"><input data-why="${esc(f.key)}" placeholder="理由（任意）" style="flex:1 1 160px"><button class="btn s" data-dismiss="${esc(f.key)}">問題ではない</button></div></li>`}).join('')||'<li class="sub">ありません</li>'}</ul>${fl.length>60?`<p class="sub">ほか ${fl.length-60}件</p>`:''}`}
+ ${RV.dismissed?`<p class="sub" style="margin-top:8px">「問題ではない」にしたもの ${RV.dismissed}件は出していません。</p>`:''}`}
 async function pickFiles(repo){const box=$('#rf-'+repo.replace(/[^\w]/g,'_'));box.innerHTML='<p class="sub">一覧を読んでいます…</p>';const r=await api('/api/rules/files?repo='+encodeURIComponent(repo));
- box.innerHTML=`<p class="sub">決まりとして読むファイルを選ぶ（${r.files.length}件の .md）</p><div style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin-top:6px">${r.files.map(f=>`<label style="display:flex;gap:8px;align-items:center;min-height:36px;font-size:14px"><input type="checkbox" data-rpick="${esc(f.path)}" ${f.picked?'checked':''} style="width:auto"> ${esc(f.path)} <span class="badge">${APPLIES[f.applies]}</span></label>`).join('')}</div><div class="row"><button class="btn s p" data-rsave="${esc(repo)}">選んだものを保存</button></div>`}
+ box.innerHTML=`<p class="sub">決まりとして読むファイルを選ぶ（${r.files.length}件の .md）</p><div style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin-top:6px">${r.files.map(f=>`<label style="display:flex;gap:8px;align-items:center;min-height:36px;font-size:14px"><input type="checkbox" data-rpick="${esc(f.path)}" ${f.picked?'checked':''} style="width:auto"> ${esc(f.path)} <span class="badge">${APPLIES[f.applies]}</span>${f.external?'<span class="badge">外から入れたもの</span>':''}</label>`).join('')}</div><div class="row"><button class="btn s p" data-rsave="${esc(repo)}">選んだものを保存</button></div>`}
 function view(){document.querySelectorAll('.tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===VIEW));['map','pending','rules','eval'].forEach(v=>$('#v-'+v).hidden=v!==VIEW);if(VIEW==='rules')(RV?Promise.resolve(rulesView()):loadRules()).catch(e=>say(e.message));if(VIEW==='map')draw();if(VIEW==='pending')plist();if(VIEW==='eval')sets().catch(e=>say(e.message))}
 function all(){draw();detail();plist()}
 async function load(){try{M=await api('/api/map');const pd=await api('/api/pending');PENDING=pd.items;PTOTAL=pd.total;PDONE=0;$('#gate').hidden=true;index();all();if(!M.commits.length)say('まだデータがありません。「取り込み直す」を押してください。')}catch(e){say(e.message)}}
@@ -212,7 +210,8 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
   say(`取り込み：課題 ${r.linear.issues}・コミット ${r.github.commits}／埋め込み ${r.embeddings.embedded}件／提案：課題 ${r.suggestions.commitIssue}・テーマ ${r.suggestions.commitTheme}・新しい塊 ${r.suggestions.newClusters}`);b.disabled=false;await load();return}
  if(b.id==='runEval'){await runEval();return}
  if(b.dataset.rback){RDOC=null;rulesView();return}
- if(b.dataset.rf){RF=b.dataset.rf;rulesView();return}
+ if(b.dataset.ropen){const k=b.dataset.ropen;ROPEN.has(k)?ROPEN.delete(k):ROPEN.add(k);rulesView();return}
+ if(b.dataset.rext){const [repo,...pp]=b.dataset.rext.split('|');b.disabled=true;await api('/api/rules/external',{method:'POST',body:JSON.stringify({repo,path:pp.join('|'),external:b.dataset.v2==='1'})});await loadRules();say('変えました（次の取り込みからも効きます）');return}
  if(b.dataset.rfiles){await pickFiles(b.dataset.rfiles);return}
  if(b.dataset.rsave){const files=[...document.querySelectorAll('[data-rpick]')].filter(x=>x.checked).map(x=>x.dataset.rpick);await api('/api/rules/source',{method:'POST',body:JSON.stringify({repo:b.dataset.rsave,files})});say(`${files.length}件を選びました。「取り込む」を押してください`);await loadRules();return}
  if(b.dataset.rsync){b.disabled=true;say(b.dataset.rsync+' を読んでいます（1〜2分かかることがあります）…');const r=await api('/api/rules/sync',{method:'POST',body:JSON.stringify({repo:b.dataset.rsync})});say(`取り込み：文書 ${r.docs}・決まり ${r.items}（埋め込み ${r.embedded}件）`);await loadRules();return}

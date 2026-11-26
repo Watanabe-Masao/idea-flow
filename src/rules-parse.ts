@@ -98,3 +98,25 @@ export function termsOf(text: string): Set<string> {
   for (const m of text.matchAll(/[A-Za-z][\w.-]*[\w]/g)) { const t = m[0]; if (t.length >= 2 && (/[\d._-]/.test(t) || t.length >= 4) && !/^(the|and|for|with|from|this|that|true|false|null|http|https|www|com)$/i.test(t)) out.add(t); }
   return out;
 }
+
+/** 文書の中の参照（docs/a.md、a.md、../a.md）を、リポジトリの中のパスに直す */
+export function resolveRef(fromPath: string, ref: string, known: Set<string>): string | null {
+  const dirParts = fromPath.split('/').slice(0, -1);
+  const norm = (parts: string[]) => { const out: string[] = []; for (const x of parts) { if (x === '..') out.pop(); else if (x && x !== '.') out.push(x); } return out.join('/'); };
+  const relative = norm([...dirParts, ...ref.split('/')]);
+  const fromRoot = norm(ref.split('/'));
+  if (/^\.\.?\//.test(ref)) return known.has(relative) ? relative : null;
+  if (known.has(fromRoot)) return fromRoot;
+  if (known.has(relative)) return relative;
+  return null;
+}
+
+/** ライセンスのファイルがあるフォルダの「下のフォルダ」は、外から入れたもの（書き換えない）とみなす */
+export function externalByLicense(allPaths: string[], docPath: string): boolean {
+  for (const lic of allPaths.filter(p => /(^|\/)[^/]*licen[cs]e[^/]*$/i.test(p))) {
+    const dir = lic.split('/').slice(0, -1).join('/');
+    const pre = dir ? dir + '/' : '';
+    if (docPath.startsWith(pre) && docPath.slice(pre.length).includes('/')) return true;
+  }
+  return false;
+}
