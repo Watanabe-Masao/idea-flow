@@ -172,12 +172,15 @@ function findingHtml(f){let body='';
  else{const A=ritem(f.a),B=f.b?ritem(f.b):null;body=`${A?ruleCard(A):''}${B?`<p class="sub" style="margin:2px 0">↕ ${f.kind==='duplicate'?'ほぼ同じ':'近い'}（近さ ${(+f.score).toFixed(2)}）</p>${ruleCard(B)}`:''}${f.kind==='temporary'?`<small>当たった言葉：「${esc(f.detail.word)}」</small>`:''}${f.kind==='definition'?`<small>同じ言葉：${f.detail.terms.map(esc).join('、')}</small>`:''}`}
  return`<li>${body}<div class="row"><input data-why="${esc(f.key)}" placeholder="理由（任意）" style="flex:1 1 160px"><button class="btn s" data-dismiss="${esc(f.key)}">問題ではない</button></div></li>`}
 let XR={};
+const clip=(t,n=70)=>t.length>n?`<details><summary style="cursor:pointer;list-style:none">${esc(t.slice(0,n))}… <span class="sub">全文</span></summary>${esc(t)}</details>`:esc(t);
 function xrayHtml(x){const sec=(cls,t,body)=>`<div style="border:1px solid var(--line);border-left:4px solid ${cls};border-radius:0;padding:8px 10px;margin-top:8px"><b>${t}</b><div style="margin-top:4px;font-size:14px">${body}</div></div>`;
+ const likely=x.skills.filter(s=>s.likely),rest=x.skills.filter(s=>!s.likely),sk=s=>`<div>${s.likely?'◎ ':'・ '}${esc(s.title||s.path)} <span class="sub">近さ ${s.score}${s.external?'・外から入れたもの':''}</span></div>`;
+ const mN=x.missing.reduce((a,m)=>a+m.count,0);
  return`<p class="sub" style="margin-top:8px">場面「${esc(x.scene)}」で Claude に届くもの</p>
- ${sec('var(--ink)','自動で届く',x.auto.length?x.auto.map(d=>esc(d.path)+`（${d.items}）`).join('、'):'<span style="color:var(--red)">なし（入口が無い）</span>')}
- ${sec('var(--ink)','参照で届く',x.byRef.length?x.byRef.map(d=>esc(d.path)+`（${d.items}）`).join('、'):'なし')}
- ${sec('var(--mute)','場面で呼ばれそうなスキル',x.skills.length?x.skills.map(s=>`<div>${s.likely?'<b>◎ ':'・ '}${esc(s.title||s.path)}${s.likely?'</b>':''} <span class="sub">近さ ${s.score}${s.external?'・外から入れたもの':''}</span></div>`).join(''):'なし')}
- ${sec('var(--red)','この場面に関係するのに届かない決まり',x.missing.length?`<p class="sub" style="margin:0 0 4px">会話で渡さないと守られません。</p>`+x.missing.map(m=>`<div style="margin-top:6px"><b>${esc(m.path)}</b> <span class="sub">近さ ${m.best}</span>${m.rules.map(r=>`<small style="margin-top:2px">${r.line}行目：${esc(r.text)}</small>`).join('')}</div>`).join(''):'なし')}
+ ${sec('var(--ink)',`自動で届く（${x.auto.length}文書）`,x.auto.length?x.auto.map(d=>esc(d.path)+`（${d.items}）`).join('、'):'<span style="color:var(--red)">なし（入口が無い）</span>')}
+ ${sec('var(--ink)',`参照で届く（${x.byRef.length}文書）`,x.byRef.length?x.byRef.map(d=>esc(d.path)+`（${d.items}）`).join('、'):'なし')}
+ ${sec('var(--mute)',`場面で呼ばれそうなスキル（${likely.length}）`,(likely.length?likely.map(sk).join(''):'<span class="sub">この場面で呼ばれそうなスキルは無し</span>')+(rest.length?`<details style="margin-top:4px"><summary class="sub" style="cursor:pointer">ほかのスキル（近い順・${rest.length}）</summary>${rest.map(sk).join('')}</details>`:''))}
+ ${sec('var(--red)',`この場面に関係するのに届かない決まり（${x.missing.length}文書・${mN}件）`,x.missing.length?`<p class="sub" style="margin:0 0 4px">会話で渡さないと守られません。</p>`+x.missing.map(m=>`<div style="margin-top:8px"><b>${esc(m.path)}</b> <span class="sub">${m.count}件・いちばん近いもの ${m.best}</span>${m.rules.map(r=>`<div style="margin-top:3px;font-size:13px;color:var(--mute)">${r.line}行目：${clip(r.text)}</div>`).join('')}</div>`).join(''):'なし')}
  ${sec('var(--line)','メモリ','<span class="sub">まだ管理していません（メモリの使い分けは今後追加）</span>')}`}
 function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">読み込み中…</p>';return}
  if(RDOC){const d=rdoc(RDOC);if(!d){RDOC=null;return rulesView()}const its=RV.items.filter(i=>i.doc===d.id);
