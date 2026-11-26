@@ -98,6 +98,16 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
     assert.match(await mapAction(env, 'issue', { repo: 'o/r', n: '#7' }), /つながり（0）/);
     assert.match(await mapAction(env, 'feature', { repo: 'o/r', id: 'feel' }), /#8 βモデル 段階4.*［古くなっている候補］/);
     await assert.rejects(mapAction(env, 'issue', { repo: 'o/r', n: 99 }), /#99 は取り込まれていません/);
+    assert.match(await mapAction(env, 'map', { repo: 'o/r' }), /毎日の見直し：今日はまだ（前回 なし）/);
+    const rv = await mapAction(env, 'review', { repo: 'o/r' });
+    assert.match(rv, /前回：まだ一度もない/);
+    assert.match(rv, /1\. 自分で直すもの：書き方の足りないもの（前回から 8件）/);
+    assert.match(rv, /a\. どの機能にも当たらない作業 1件[\s\S]*README\.md（#6）/);
+    assert.match(rv, /古くなっている候補の Issue 1件：#8/);
+    assert.match(rv, /貯めているのに画面で使っていないデータ 1：警報/);
+    assert.match(await mapAction(env, 'map', { repo: 'o/r' }), /毎日の見直し：今日は済み/);
+    const again = await mapAction(env, 'review', { repo: 'o/r', peek: true });
+    assert.match(again, /前回：\d+\/\d+/); // 2回目は前回の日付から（同じ日のものは、もう一度出る）
   } finally { globalThis.fetch = real2; }
   delete CATALOGS['o/r'];
 });
