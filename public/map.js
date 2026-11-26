@@ -60,8 +60,10 @@ async function sync(r) {
   try {
     // 最近の更新（と Issue）を先に。追いつくまで続ける（3回まで）。そのあと、さかのぼりが残っていれば続ける
     let up = 0, iss = 0, caught = false, done = false, back = 0, busy = false;
-    for (let k = 0; k < 3 && !caught; k++) { const x = await api('/api/map/sync', { method: 'POST', body: JSON.stringify({ repo: r, mode: 'update' }) }); if (x.busy) { busy = true; break; } up += x.updated; iss = x.issues; caught = x.caughtUp; done = x.backfillDone; }
-    for (let k = 0; k < 8 && !busy && !done; k++) { const x = await api('/api/map/sync', { method: 'POST', body: JSON.stringify({ repo: r, mode: 'backfill', pages: 4 }) }); if (x.busy) { busy = true; break; } back += x.backfilled; done = x.backfillDone; s.note = `さかのぼり ${back}件…`; draw(); }
+    // ほかの読み込み（コネクタなど）と重なったら、4秒待って2回まで頼み直す（ロックは終われば外れる）
+    const call = async body => { for (let t = 0; ; t++) { const x = await api('/api/map/sync', { method: 'POST', body: JSON.stringify({ repo: r, ...body }) }); if (!x.busy || t >= 2) return x; s.note = 'ほかの読み込みが終わるのを待っています…'; draw(); await new Promise(z => setTimeout(z, 4000)); } };
+    for (let k = 0; k < 3 && !caught; k++) { const x = await call({ mode: 'update' }); if (x.busy) { busy = true; break; } up += x.updated; iss = x.issues; caught = x.caughtUp; done = x.backfillDone; }
+    for (let k = 0; k < 8 && !busy && !done; k++) { const x = await call({ mode: 'backfill', pages: 4 }); if (x.busy) { busy = true; break; } back += x.backfilled; done = x.backfillDone; s.note = `さかのぼり ${back}件…`; draw(); }
     await load(r);
     s.note = busy ? 'ほかの読み込み（コネクタなど）の途中だったので、保存済みの地図を出しています。少し待ってから読み直してください。'
       : `最近の更新 ${up}件${caught ? '' : '（続きあり）'}・Issue ${iss}件${back ? `・さかのぼり ${back}件` : ''}を確かめました。`;
@@ -264,7 +266,7 @@ function draw() {
   const nodeNote = s.node ? `<div class="card" style="margin-top:8px"><b>${esc(d.nodes[s.node].name)}</b><div class="sub">${esc(d.nodes[s.node].note)}。使っている機能：${esc(d.features.filter(f => f.data.includes(s.node)).map(f => f.name).join('、') || 'なし')}</div>${d.issues.filter(i => i.nodes.includes(s.node)).map(i => iline(d, i)).join('')}</div>` : '';
   EL.innerHTML = `<div class="wm">${top}
   <p class="sub" style="margin-top:8px">機能の一覧と、マージした PR（変えたファイル）・Issue から自動で作ります。読むだけで、リポジトリには書きません。今日（${md(d.today)}）までの${n}日。</p>
-  <div class="wm-sum"><div class="hot"><b>${c.stopped}</b><span>直近7日マージなしの機能</span></div><div><b>${c.building}／${c.settled}</b><span>作っている／落ち着いた</span></div>
+  <div class="wm-sum"><div class="hot"><b>${c.stopped}</b><span>直近7日マージなしの機能</span></div><div><b>${c.building}／${c.settled}</b><span>直近4日に3件以上マージ／直近7日にマージあり</span></div>
   <div><b>${c.openIssues}</b><span>開いている Issue（うち古い候補 ${c.stale}）</span></div><div><b style="color:var(--red2)">${c.unused}</b><span>貯めているが画面なし</span></div></div>
   ${writing(d.writing)}
   <h3>機能ごとの稼働</h3><p class="sub">1マス＝1日（マージした PR の数）。マスを指でなぞると、その日の作業が下に出ます。名前を押すと中身が開きます。</p>
@@ -273,7 +275,7 @@ function draw() {
   <div class="wm-board"><div class="wm-days"><span></span><div class="wm-strip" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${d.days.map((x, k) => `<i class="l">${(n - 1 - k) % step === 0 ? md(x) : ''}</i>`).join('')}</div></div>
   <div id="wmrows">${rows}</div></div>
   <p class="sub" style="margin-top:8px">状態は、その機能のファイルを変えた PR のマージの数から：直近4日に3件以上／直近7日にマージあり／直近7日マージなし。</p>
-  <h3>開いている Issue と、つながる機能</h3><p class="sub">関係する機能がすべて止まっていて、Issue も7日以上動いていないものに「古くなっている候補」を付けます。閉じるかを決めるのは人です。</p>
+  <h3>開いている Issue と、つながる機能</h3><p class="sub">関係する機能がすべて直近7日マージなしで、Issue も7日以上動いていないものに「古くなっている候補」を付けます。閉じるかを決めるのは人です。</p>
   ${[...open].sort((a, b) => b.stale - a.stale).map(i => iline(d, i)).join('') || '<p class="sub">なし</p>'}
   <details style="margin-top:8px"><summary class="sub">閉じた Issue ${closed.length} 件</summary>${closed.map(i => iline(d, i)).join('')}</details>
   <h3>どの機能にも当たらない作業</h3><p class="sub">この期間に、一覧のどの機能のファイルにも当たらなかった PR。増えてきたら、一覧に機能を足すかを決めます。</p>

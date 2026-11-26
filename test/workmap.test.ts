@@ -167,7 +167,7 @@ test('申告は区切り線（---）で終わる・「関連：なし」は守�
 test('同期：重なったら後の方は何もしない／ロックが切れたあとの古い処理は書けない／最近の更新は前回の境界に届くまで続きから', async () => {
   const env = fakeEnv() as any; env.GITHUB_TOKEN = 't';
   CATALOGS['o/r'] = CAT;
-  const N = 201, base = Date.parse('2026-11-27T00:00:00Z');
+  const N = 201, base = Date.now() - 600e3, prev = new Date(Date.now() - 864e5).toISOString(); // PR はどれも、前回の境界（1日前）より新しく、今より前
   // 新しく動いた順の PR（201件。どれも前回の境界より新しい）。1ページ50件
   const pr = (k: number, title = `作業${k}`) => ({ number: k, title, url: 'u' + k, mergedAt: '2026-11-20T00:00:00Z', updatedAt: new Date(base - k * 1000).toISOString(), body: '', files: { nodes: [] } });
   let title = '新しい題', pause: (() => void) | null = null, hold = false;
@@ -182,15 +182,17 @@ test('同期：重なったら後の方は何もしない／ロックが切れ�
   }) as typeof fetch;
   try {
     // 前回の境界：いちばん古い（201番目）より前
-    await env.DB.prepare("INSERT INTO map_sync (repo, pr_done, prs_at) VALUES ('o/r', 1, '2026-11-26T00:00:00Z')").run();
+    await env.DB.prepare("INSERT INTO map_sync (repo, pr_done, prs_at) VALUES ('o/r', 1, ?)").bind(prev).run();
     const a = await syncMap(env, 'o/r', { mode: 'update' });
     assert.deepEqual([a.updated, a.caughtUp], [200, false]);          // 4ページで止まる。境界にはまだ届かない
     let row = await env.DB.prepare("SELECT prs_at, upd_cursor FROM map_sync WHERE repo = 'o/r'").first();
-    assert.deepEqual([row.prs_at, row.upd_cursor], ['2026-11-26T00:00:00Z', '200']); // 最終成功時刻は進めない
+    assert.deepEqual([row.prs_at, row.upd_cursor], [prev, '200']); // 最終成功時刻は進めない
     const b = await syncMap(env, 'o/r', { mode: 'update' });
     assert.deepEqual([b.updated, b.caughtUp], [1, true]);             // 残りの1件を続きから拾う
     row = await env.DB.prepare("SELECT prs_at, upd_cursor FROM map_sync WHERE repo = 'o/r'").first();
     assert.equal(row.upd_cursor, null);
+    const c = await syncMap(env, 'o/r', { mode: 'update' });
+    assert.deepEqual([c.updated, c.caughtUp], [0, true]);            // 何も動いていなければ 0件（読んだページの数ではなく、新しく動いた数）
     // 重なり：1つ目を GitHub の答えの途中で止め、その間に2つ目
     title = '古い題'; hold = true;
     const first = syncMap(env, 'o/r', { mode: 'update' });
