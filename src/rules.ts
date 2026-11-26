@@ -1,10 +1,11 @@
 // 決まりの見える化（#8）。リポジトリから決まりの文書を読み、単位に分け、意味の近さで問題を探す。
 // GitHub には書き込まない。人が「問題ではない」と決めたものは rule_dismissed に残る。
 import type { Env } from './types.ts';
-import { classify, defaultPick, parseRules, termsOf, TEMP_WORDS, NEG_WORDS } from './rules-parse.ts';
+import { classify, defaultPick, externalByLicense, parseRules, resolveRef, termsOf, TEMP_WORDS, NEG_WORDS } from './rules-parse.ts';
 import { loadVectors, upsertEmbeddings } from './embed.ts';
 import { dot, type Vec } from './vec.ts';
 import { bulkInsert, nowIso, sha256 } from './util.ts';
+import { diagnose } from './diagnosis.ts';
 
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 
@@ -31,9 +32,10 @@ export async function listFiles(env: Env, repo: string) {
   const src = (await sources(env)).find(s => s.repo === repo);
   const branch = src?.branch ?? 'main';
   const tree = await gh<{ tree: { path: string; type: string; sha: string }[]; truncated: boolean }>(env, `/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
-  const md = tree.tree.filter(t => t.type === 'blob' && /\.md$/i.test(t.path)).map(t => t.path).sort();
+  const all = tree.tree.filter(t => t.type === 'blob').map(t => t.path);
+  const md = all.filter(p => /\.md$/i.test(p)).sort();
   const chosen = src && src.files.length ? new Set(src.files) : new Set(md.filter(defaultPick));
-  return { repo, branch, truncated: tree.truncated, files: md.map(p => ({ path: p, picked: chosen.has(p), ...classify(p) })) };
+  return { repo, branch, truncated: tree.truncated, files: md.map(p => ({ path: p, picked: chosen.has(p), external: externalByLicense(all, p), ...classify(p) })) };
 }
 
 export async function saveSource(env: Env, repo: string, files: string[], branch = 'main') {
@@ -48,6 +50,8 @@ export async function saveSource(env: Env, repo: string, files: string[], branch
 export async function syncRules(env: Env, repo: string) {
   const info = await listFiles(env, repo);
   const picked = info.files.filter(f => f.picked).map(f => f.path);
+  const extAuto = new Map(info.files.map(f => [f.path, f.external]));
+  const extHuman = new Map((await env.DB.prepare('SELECT path, external FROM rule_external WHERE repo = ?').bind(repo).all<{ path: string; external: number }>()).results.map(r => [r.path, !!r.external]));
   const now = nowIso();
   const docRows: unknown[][] = [], itemRows: unknown[][] = [];
   for (const path of picked) {
@@ -55,13 +59,14 @@ export async function syncRules(env: Env, repo: string) {
     const c = classify(path);
     const p = parseRules(src, c.kind);
     const id = `${repo}|${path}`;
-    docRows.push([id, repo, path, (await sha256(src)).slice(0, 16), c.kind, c.applies, c.scope, p.title, p.description, JSON.stringify(p.refs), now]);
+    const ext = extHuman.has(path) ? extHuman.get(path)! : !!extAuto.get(path);
+    docRows.push([id, repo, path, (await sha256(src)).slice(0, 16), c.kind, c.applies, c.scope, p.title, p.description, JSON.stringify(p.refs), now, ext ? 1 : 0, extHuman.has(path) ? 'human' : ext ? 'auto' : null]);
     for (const it of p.items) itemRows.push([(await sha256(`${id}|${it.n}|${it.text}`)).slice(0, 20), id, it.n, it.heading, it.text.slice(0, 1200), it.line, it.kind]);
   }
   await env.DB.batch([
     env.DB.prepare('DELETE FROM rule_items WHERE doc IN (SELECT id FROM rule_docs WHERE repo = ?)').bind(repo),
     env.DB.prepare('DELETE FROM rule_docs WHERE repo = ?').bind(repo),
-    ...bulkInsert(env.DB, 'INSERT INTO rule_docs (id, repo, path, sha, kind, applies, scope, title, description, refs, synced_at) VALUES', 11, docRows),
+    ...bulkInsert(env.DB, 'INSERT INTO rule_docs (id, repo, path, sha, kind, applies, scope, title, description, refs, synced_at, external, external_by) VALUES', 13, docRows),
     ...bulkInsert(env.DB, 'INSERT OR IGNORE INTO rule_items (id, doc, n, heading, text, line, kind) VALUES', 7, itemRows),
     env.DB.prepare('UPDATE rule_sources SET synced_at = ?, files = ? WHERE repo = ?').bind(now, JSON.stringify(picked), repo),
   ]);
@@ -75,14 +80,15 @@ export async function syncRules(env: Env, repo: string) {
 const ruleText = (i: { heading: string; text: string }) => (i.heading ? i.heading.split(' › ').pop() + '：' : '') + i.text.slice(0, 500);
 
 type Item = { id: string; doc: string; heading: string; text: string; kind: string };
-type Doc = { id: string; repo: string; path: string; kind: string; applies: string; scope: string; title: string | null; description: string | null; refs: string };
+type Doc = { id: string; repo: string; path: string; kind: string; applies: string; scope: string; title: string | null; description: string | null; refs: string; external: number; external_by: string | null };
 
 /** 問題を探し直す（全部のリポジトリをまとめて。別のリポジトリどうしの重複も見える） */
 export async function analyze(env: Env) {
   const st = Object.fromEntries((await env.DB.prepare("SELECT key, value FROM settings WHERE key LIKE 'rule_%'").all<{ key: string; value: string }>()).results.map(r => [r.key, Number(r.value)]));
   const dupT = st.rule_dup || 0.88, confT = st.rule_conflict || 0.78, skillT = st.rule_skill || 0.75;
   const docs = (await env.DB.prepare('SELECT * FROM rule_docs').all<Doc>()).results;
-  const items = (await env.DB.prepare('SELECT id, doc, heading, text, kind FROM rule_items').all<Item>()).results;
+  const extDoc = new Set(docs.filter(d => d.external).map(d => d.id));
+  const items = (await env.DB.prepare('SELECT id, doc, heading, text, kind FROM rule_items').all<Item>()).results.filter(i => !extDoc.has(i.doc)); // 外から入れたものは診断しない
   const vecs = await loadVectors(env, 'rule');
   const rows: unknown[][] = [];
   const add = (kind: string, a: string, b: string | null, score: number | null, detail: unknown) => rows.push([`${kind}|${a}|${b ?? ''}`, kind, a, b, score, JSON.stringify(detail)]);
@@ -115,16 +121,27 @@ export async function analyze(env: Env) {
     if (s >= skillT) add('skill_overlap', descs[x].doc, descs[y].doc, s, {});
   }
 
-  // どこからも読まれない決まりの文書：自動で読まれる文書（CLAUDE.md など）からたどれないもの
+  // 届き方：自動で届く文書（CLAUDE.md など）から、参照をたどって届くか
   for (const repo of new Set(docs.map(d => d.repo))) {
-    const ds = docs.filter(d => d.repo === repo);
-    const byPath = (ref: string) => ds.find(d => d.path === ref || d.path.endsWith('/' + ref));
+    const ds = docs.filter(d => d.repo === repo && !d.external);
+    const g = refGraph(ds);
+    const entries = ds.filter(d => d.applies === 'always');
+    const need = ds.filter(d => d.applies === 'referenced');
+    if (!entries.length) {
+      // 入口が無い：文書ごとに並べず、原因を1件にまとめる。入口の候補は、参照をたどって多くの文書に届くもの
+      if (!need.length) continue;
+      // ほかの文書からよく参照されている（まとめ役の）文書を先に。同じなら届く数が多い順
+      // （届く数だけで選ぶと、まとめ役を参照しているだけの個別の文書（絵本の決まりなど）が上に来てしまう）
+      const indeg = (id: string) => [...g.values()].filter(t => t.has(id)).length;
+      const reach = need.map(d => ({ d, n: reachFrom(g, d.id).size - 1, k: indeg(d.id) })).sort((a, b) => b.k - a.k || b.n - a.n);
+      add('no_entry', `${repo}|`, null, null, { docs: need.map(d => d.path), items: items.filter(i => need.some(d => d.id === i.doc)).length, candidates: reach.slice(0, 3).filter(r => r.n > 0).map(r => ({ path: r.d.path, reaches: [...reachFrom(g, r.d.id)].filter(id => id !== r.d.id).map(id => ds.find(x => x.id === id)!.path) })) });
+      continue;
+    }
     const reached = new Set<string>();
-    const walk = (d: Doc) => { if (reached.has(d.id)) return; reached.add(d.id); for (const r of JSON.parse(d.refs) as string[]) { const t = byPath(r); if (t) walk(t); } };
-    ds.filter(d => d.applies === 'always').forEach(walk);
-    for (const d of ds) if (d.applies === 'referenced' && !reached.has(d.id)) {
-      const from = ds.filter(o => o.id !== d.id && (JSON.parse(o.refs) as string[]).some(r => byPath(r)?.id === d.id)).map(o => o.path);
-      add('unreferenced', d.id, null, null, { from, noAuto: !ds.some(o => o.applies === 'always') });
+    for (const e of entries) for (const id of reachFrom(g, e.id)) reached.add(id);
+    for (const d of need) if (!reached.has(d.id)) {
+      const from = ds.filter(o => g.get(o.id)?.has(d.id)).map(o => o.path);
+      add('unreferenced', d.id, null, null, { from });
     }
   }
 
@@ -137,14 +154,46 @@ export async function analyze(env: Env) {
   return count;
 }
 
+/** 文書の参照のつながり（パスを正しく直してから） */
+function refGraph(ds: Doc[]) {
+  const known = new Set(ds.map(d => d.path)), byPath = new Map(ds.map(d => [d.path, d.id]));
+  const g = new Map<string, Set<string>>();
+  for (const d of ds) {
+    const to = new Set<string>();
+    for (const r of JSON.parse(d.refs) as string[]) { const p = resolveRef(d.path, r, known); if (p && p !== d.path) to.add(byPath.get(p)!); }
+    g.set(d.id, to);
+  }
+  return g;
+}
+function reachFrom(g: Map<string, Set<string>>, start: string) {
+  const seen = new Set<string>([start]), q = [start];
+  while (q.length) for (const n of g.get(q.shift()!) ?? []) if (!seen.has(n)) { seen.add(n); q.push(n); }
+  return seen;
+}
+
+/** 人が「外から入れたもの（書き換えない）」かどうかを決める。次の取り込みからも効く */
+export async function setExternal(env: Env, repo: string, path: string, external: boolean) {
+  const d = await env.DB.prepare('SELECT id FROM rule_docs WHERE repo = ? AND path = ?').bind(repo, path).first<{ id: string }>();
+  if (!d) throw new Error('その文書は取り込まれていません');
+  await env.DB.batch([
+    env.DB.prepare('INSERT OR REPLACE INTO rule_external (repo, path, external, at) VALUES (?, ?, ?, ?)').bind(repo, path, external ? 1 : 0, nowIso()),
+    env.DB.prepare("UPDATE rule_docs SET external = ?, external_by = 'human' WHERE id = ?").bind(external ? 1 : 0, d.id),
+  ]);
+  return { ok: true, findings: await analyze(env) };
+}
+
 /** 画面用：文書・決まり・問題（人が「問題ではない」にしたものは除く） */
 export async function rulesView(env: Env) {
-  const docs = (await env.DB.prepare('SELECT id, repo, path, kind, applies, scope, title, description, refs, synced_at FROM rule_docs ORDER BY repo, path').all<Doc & { synced_at: string }>()).results;
+  const docs = (await env.DB.prepare('SELECT id, repo, path, kind, applies, scope, title, description, refs, synced_at, external, external_by FROM rule_docs ORDER BY repo, path').all<Doc & { synced_at: string }>()).results;
   const items = (await env.DB.prepare('SELECT id, doc, n, heading, text, line, kind FROM rule_items ORDER BY doc, n').all()).results;
   const dismissed = new Set((await env.DB.prepare('SELECT key FROM rule_dismissed').all<{ key: string }>()).results.map(r => r.key));
   const findings = (await env.DB.prepare('SELECT key, kind, a, b, score, detail FROM rule_findings ORDER BY kind, score DESC').all<{ key: string; kind: string; a: string; b: string | null; score: number | null; detail: string }>()).results
     .filter(f => !dismissed.has(f.key)).map(f => ({ ...f, detail: JSON.parse(f.detail) }));
-  return { sources: await sources(env), docs: docs.map(d => ({ ...d, refs: JSON.parse(d.refs) })), items, findings, dismissed: dismissed.size };
+  const ds = docs.map(d => ({ ...d, refs: JSON.parse(d.refs) }));
+  const srcs = await sources(env);
+  const repos = [...new Set([...srcs.map(x => x.repo), ...ds.map(d => d.repo)])];
+  const diagnosis = Object.fromEntries(repos.map(r => [r, diagnose(r, findings, ds, items as { id: string; doc: string }[])]));
+  return { sources: srcs, docs: ds, items, findings, dismissed: dismissed.size, diagnosis };
 }
 
 export async function dismiss(env: Env, key: string, why: string | null) {

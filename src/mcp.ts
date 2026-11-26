@@ -2,6 +2,7 @@
 // いまは読むだけ（GitHub にもアプリのデータにも書き込まない）。合言葉は URL の /mcp/<MCP_TOKEN>。
 import type { Env } from './types.ts';
 import { rulesView } from './rules.ts';
+import { PLAIN_APPLIES } from './diagnosis.ts';
 import { embedMany, loadVectors } from './embed.ts';
 import { dot } from './vec.ts';
 import { safeEqual } from './util.ts';
@@ -11,18 +12,20 @@ const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const INSTRUCTIONS = `idea-flow は、リポジトリの CLAUDE.md・ROLE.md・SKILL.md・決まりの文書を「決まりの単位（条項）」に分け、どこに効いているか、どんな問題があるかを見える化する道具です。
 - これは人と Claude が相談するための道具です。決めるのは人です。見つかった問題は、事実（どの文書の何行目か、どう読まれるか）と、あなたの見立て（なぜ問題か、直し方の案、直したときの副作用）を分けて伝えてください。
 - いまの道具は読むだけです。リポジトリやアプリの中身を変えることはできません。直し方の案は、人が確かめられるように具体的に（どの文書のどの行を、どう変えるか）書いてください。
-- 「どう読まれるか」の意味：自動で読まれる（CLAUDE.md・AGENTS.md）／役割として（ROLE.md）／説明文で読まれる（スキル）／参照されたときだけ（それ以外の文書。会話で渡さない限り効かない）。
+- 人に伝えるときは、まず結論（rules_overview の診断書）から、ふだんの言葉で。件数や一覧は聞かれたら出す。道具の内側の言葉（finding の種類名など）は使わない。
+- 届き方の意味：自動で届く（CLAUDE.md・AGENTS.md）／役割として届く（ROLE.md）／場面に合えば届く（スキル。説明文で呼ばれる）／渡さないと届かない（それ以外の文書）。
+- 外から入れた決まり（ライセンスつきのスキルなど、書き換えないもの）は診断から外してある。
 - 寿命（短期／長期）はまだ人が決めていないので、すべて「未分類」です。勝手に決めず、分類の案として出してください。
-- 問題の種類：duplicate 重複 / definition 定義が分かれている / conflict 食い違いの候補 / temporary 一時的な決まりの残り（ドメインの言葉にも当たる）/ skill_overlap 読み込まれ方が重なるスキル / unreferenced どこからも読まれない文書。`;
+- 問題の種類（list_rule_findings の kind）：no_entry 入口が無い / unreferenced 入口からたどれない / duplicate 同じことが2か所 / definition 同じ言葉を2か所で説明 / conflict 食い違いかもしれない / temporary 終わったかもしれない / skill_overlap 似た場面で呼ばれるスキル。`;
 
-const KIND_JA: Record<string, string> = { duplicate: '重複', definition: '定義が分かれている', conflict: '食い違いの候補', temporary: '一時的な決まりの残り', skill_overlap: '読み込まれ方が重なるスキル', unreferenced: 'どこからも読まれない文書' };
-const APPLIES_JA: Record<string, string> = { always: '自動で読まれる', role: '役割として読まれる', skill: '説明文で読まれる（スキル）', referenced: '参照されたときだけ' };
+const KIND_JA: Record<string, string> = { no_entry: '入口が無い', unreferenced: '入口からたどれない', duplicate: '同じことが2か所', definition: '同じ言葉を2か所で説明', conflict: '食い違いかもしれない', temporary: '終わったかもしれない', skill_overlap: '似た場面で呼ばれるスキル' };
+const APPLIES_JA = PLAIN_APPLIES;
 
 const TOOLS = [
   {
     name: 'rules_overview',
-    description: '取り込んだリポジトリごとに、文書の一覧（どう読まれるか・決まりの数・問題の数）と、問題の種類ごとの件数を返す。最初に使う。',
-    inputSchema: { type: 'object', properties: { repo: { type: 'string', description: 'owner/name（省略するとすべて）' } }, additionalProperties: false },
+    description: '取り込んだリポジトリごとの診断書（結論・なぜ困るか・次の一手）を返す。最初に使う。docs=true で文書の一覧（届き方・決まりの数）も付ける。',
+    inputSchema: { type: 'object', properties: { repo: { type: 'string', description: 'owner/name（省略するとすべて）' }, docs: { type: 'boolean', description: '文書の一覧も付ける' } }, additionalProperties: false },
     annotations: { readOnlyHint: true },
   },
   {
@@ -72,40 +75,36 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
   const repoOk = (r: string) => !a.repo || r === a.repo;
   switch (name) {
     case 'rules_overview': {
-      const repos = [...new Set([...v.sources.map(s => s.repo), ...v.docs.map(d => d.repo)])].filter(repoOk);
+      const repos = Object.keys(v.diagnosis).filter(repoOk);
       if (!v.docs.some(d => repoOk(d.repo))) return text('まだ何も取り込まれていません。アプリの「決まり」タブで取り込んでもらってください。');
       const out: string[] = [];
       for (const r of repos) {
-        const s = v.sources.find(x => x.repo === r), ds = v.docs.filter(d => d.repo === r);
-        const cnt: Record<string, number> = {};
-        for (const f of v.findings) {
-          const ids = [f.a, f.b].filter(Boolean) as string[];
-          const docOf = (id: string) => v.docs.find(d => d.id === id)?.repo ?? v.docs.find(d => d.id === items.find(i => i.id === id)?.doc)?.repo;
-          if (ids.some(id => docOf(id) === r)) cnt[f.kind] = (cnt[f.kind] ?? 0) + 1;
-        }
-        out.push(`■ ${r}（取り込み ${s?.synced_at ? s.synced_at.slice(0, 16).replace('T', ' ') + ' UTC' : 'まだ'}・文書 ${ds.length}・決まり ${items.filter(i => ds.some(d => d.id === i.doc)).length}）`);
-        if (ds.length && !ds.some(d => d.applies === 'always')) out.push('  注意：自動で読まれる文書（CLAUDE.md・AGENTS.md）が無い。ここの決まりは会話で渡したときにしか効かない');
-        out.push('  問題：' + (Object.entries(cnt).map(([k, n]) => `${KIND_JA[k]} ${n}`).join('・') || 'なし'));
-        for (const d of ds) {
-          const n = items.filter(i => i.doc === d.id).length;
-          const f = v.findings.filter(x => x.a === d.id || x.b === d.id || items.some(i => i.doc === d.id && (i.id === x.a || i.id === x.b))).length;
-          out.push(`  - ${d.path}［${APPLIES_JA[d.applies]}］決まり ${n}${f ? `・問題 ${f}` : ''}${d.refs.length ? `・参照：${d.refs.join('、')}` : ''}`);
-        }
+        const s = v.sources.find(x => x.repo === r), ds = v.docs.filter(d => d.repo === r), dg = v.diagnosis[r];
+        if (!ds.length) continue;
+        out.push(`■ ${r} の診断（取り込み ${s?.synced_at ? s.synced_at.slice(0, 16).replace('T', ' ') + ' UTC' : 'まだ'}・文書 ${ds.length}・決まり ${items.filter(i => ds.some(d => d.id === i.doc)).length}）`);
+        if (!dg.conclusions.length) out.push('  問題は見つかっていません。');
+        dg.conclusions.forEach((c, k) => out.push(`  ${k + 1}. ${c.title}`, `     なぜ困るか：${c.why}`, `     次の一手：${c.next}`, `     （詳しくは list_rule_findings kind=${c.kind}）`));
+        if (dg.external.length) out.push(`  外から入れた決まり（書き換えないもの。診断から外している）：${dg.external.length}件（${dg.external.slice(0, 3).join('、')}${dg.external.length > 3 ? ' ほか' : ''}）`);
+        if (a.docs) for (const d of ds) out.push(`  - ${d.path}［${APPLIES_JA[d.applies]}${d.external ? '・外から入れたもの' : ''}］決まり ${items.filter(i => i.doc === d.id).length}`);
       }
       if (v.dismissed) out.push(`（人が「問題ではない」にしたもの ${v.dismissed}件は数えていません）`);
       return text(out.join('\n'));
     }
     case 'list_rule_findings': {
-      const docRepo = (id: string) => v.docs.find(d => d.id === id)?.repo ?? v.docs.find(d => d.id === items.find(i => i.id === id)?.doc)?.repo;
+      const docRepo = (id: string) => v.docs.find(d => d.id === id)?.repo ?? v.docs.find(d => d.id === items.find(i => i.id === id)?.doc)?.repo ?? (id.endsWith('|') ? id.slice(0, -1) : undefined);
       const fl = v.findings.filter(f => (!a.kind || f.kind === a.kind) && (!a.repo || docRepo(f.a) === a.repo || (f.b && docRepo(f.b) === a.repo)));
       const off = num(a.offset, 0, 100000), lim = num(a.limit, 15, 50) || 15;
       const page = fl.slice(off, off + lim);
       const lines = [`${fl.length}件中 ${off + 1}〜${off + page.length}件目${a.kind ? `（${KIND_JA[String(a.kind)]}）` : ''}`];
       for (const f of page) {
         lines.push('', `[${KIND_JA[f.kind]}] key=${f.key}${f.score != null ? `・近さ ${(+f.score).toFixed(2)}` : ''}`);
-        if (f.kind === 'unreferenced') {
+        if (f.kind === 'no_entry') {
+          lines.push(`  渡さないと届かない文書 ${f.detail.docs.length}件（決まり ${f.detail.items}件）：${f.detail.docs.join('、')}`);
+          for (const c of f.detail.candidates ?? []) lines.push(`  入口の候補：${c.path} → 参照をたどって ${c.reaches.join('、')} に届く`);
+          lines.push('  ※候補は参照されている数（まとめ役かどうか）と届く数で選んだもの。入口の決まりは全体に効くので、全体に効いてよい中身かは人が確かめる');
+        } else if (f.kind === 'unreferenced') {
           const d = v.docs.find(x => x.id === f.a)!;
-          lines.push(`  ${d.repo} ${d.path}（決まり ${items.filter(i => i.doc === d.id).length}）${f.detail.from?.length ? `・参照しているのは ${f.detail.from.join('、')}（自動では読まれない）` : '・どこからも参照されていない'}`);
+          lines.push(`  ${d.repo} ${d.path}（決まり ${items.filter(i => i.doc === d.id).length}）${f.detail.from?.length ? `・参照しているのは ${f.detail.from.join('、')}（どれも入口から届かない）` : '・どこからも参照されていない'}`);
         } else if (f.kind === 'skill_overlap') {
           for (const id of [f.a, f.b]) { const d = v.docs.find(x => x.id === id); if (d) lines.push(`  ${d.path}：${d.description ?? ''}`); }
         } else {

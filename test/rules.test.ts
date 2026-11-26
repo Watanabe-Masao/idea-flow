@@ -78,3 +78,52 @@ test('取り込み → 問題（重複・一時的・どこからも読まれな
     assert.ok(!(await rulesView(env)).findings.some(f => f.key === t.key), '問題ではないにしたものは、取り込み直しても出ない');
   } finally { globalThis.fetch = real; }
 });
+
+import { resolveRef, externalByLicense } from '../src/rules-parse.ts';
+import { diagnose } from '../src/diagnosis.ts';
+
+test('参照のパスを直す（同じフォルダ・上のフォルダ・リポジトリの根から）', () => {
+  const known = new Set(['docs/thread-rules.md', 'README.md', 'docs/a.md']);
+  assert.equal(resolveRef('docs/data-map.md', 'thread-rules.md', known), 'docs/thread-rules.md');
+  assert.equal(resolveRef('docs/data-map.md', '../README.md', known), 'README.md');
+  assert.equal(resolveRef('docs/x.md', 'docs/a.md', known), 'docs/a.md');
+  assert.equal(resolveRef('docs/x.md', 'nothing.md', known), null);
+});
+
+test('ライセンスのあるフォルダの下のフォルダは、外から入れたもの', () => {
+  const all = ['.claude/skills/GSAP-SKILLS-LICENSE', '.claude/skills/README.md', '.claude/skills/gsap-core/SKILL.md', 'docs/a.md'];
+  assert.equal(externalByLicense(all, '.claude/skills/gsap-core/SKILL.md'), true);
+  assert.equal(externalByLicense(all, '.claude/skills/README.md'), false, 'そのフォルダ直下の README は自分たちの決まり');
+  assert.equal(externalByLicense(all, 'docs/a.md'), false);
+});
+
+test('入口が無いときは「入口が無い」1件にまとめ、入口の候補を出す。外から入れたものは診断しない', async () => {
+  const files: Record<string, string> = {
+    'docs/rules.md': '# 運用\n- デザインは docs/design.md を読む\n',
+    'docs/design.md': '# デザイン\n- 文字は Noto Sans JP を使う。小さい文字は出さない\n',
+    'vendor/LICENSE': 'MIT',
+    'vendor/x/SKILL.md': '---\nname: x\ndescription: use x\n---\n# X\n- 文字は Noto Sans JP を使う。小さい文字は出さない\n',
+  };
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (u: string | URL) => {
+    const url = new URL(String(u));
+    if (url.pathname.includes('/git/trees/')) return Response.json({ truncated: false, tree: Object.keys(files).map(p => ({ path: p, type: 'blob', sha: 'x' })) });
+    const m = url.pathname.match(/\/contents\/(.+)$/);
+    return m ? new Response(files[decodeURIComponent(m[1])]) : new Response('nf', { status: 404 });
+  }) as typeof fetch;
+  try {
+    const env = fakeEnv();
+    await saveSource(env, 'o/r', ['docs/rules.md', 'docs/design.md', 'vendor/x/SKILL.md']);
+    await syncRules(env, 'o/r');
+    const v = await rulesView(env);
+    assert.ok(v.docs.find(d => d.path === 'vendor/x/SKILL.md')!.external);
+    assert.ok(!v.findings.some(f => f.kind === 'duplicate'), '外から入れたものとの重複は出さない');
+    assert.ok(!v.findings.some(f => f.kind === 'unreferenced'), '入口が無いときは文書ごとに並べない');
+    const ne = v.findings.find(f => f.kind === 'no_entry')!;
+    assert.equal(ne.detail.candidates[0].path, 'docs/rules.md');
+    const dg = diagnose('o/r', v.findings, v.docs, v.items as never);
+    assert.equal(dg.conclusions[0].kind, 'no_entry');
+    assert.match(dg.conclusions[0].next, /docs\/rules.md（そこから 1件に届く）/);
+    assert.deepEqual(dg.external, ['vendor/x/SKILL.md']);
+  } finally { globalThis.fetch = real; }
+});
