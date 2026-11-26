@@ -4,6 +4,7 @@ import { errorJson, json, jstDay, newId, nowIso, safeEqual } from './util.ts';
 import { analyze, dismiss, listFiles, rulesView, saveSource, setExternal, syncRules, xray } from './rules.ts';
 import { summarizeStep, summariesOf } from './summary.ts';
 import { consultFor, consultPrompt } from './consult.ts';
+import { exportPr, exportPreview, projectInstruction } from './export.ts';
 import { addComment, contractText, decide as decideChange, draftTree, preview as previewChange, propose, requests as changeRequests, scopeTree, suggestTree } from './scopes.ts';
 
 const isAdmin = (req: Request, env: Env) => {
@@ -38,6 +39,8 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       return json({ doc, items, sections, summaries: await summariesOf(env, [`doc|${doc.id}`, ...heads.map(h => `head|${doc.id}|${h}`)]) });
     }
     if (req.method === 'GET' && p === '/api/scopes/contract') { const r = url.searchParams.get('repo') ?? '', t = await scopeTree(env, r), sc = t.find(x => x.key === url.searchParams.get('scope')); if (!sc) return errorJson('範囲が見つかりません', 404); return json({ text: contractText(r, t, sc.id) }); }
+    if (req.method === 'GET' && p === '/api/export/preview') return json(await exportPreview(env, url.searchParams.get('repo') ?? ''));
+    if (req.method === 'GET' && p === '/api/export/project') return json({ text: await projectInstruction(env, url.searchParams.get('repo') ?? '', url.searchParams.get('scope') ?? '') });
     if (req.method === 'GET' && p === '/api/rules/files') return json(await listFiles(env, url.searchParams.get('repo') ?? ''));
     if (req.method === 'GET' && p === '/api/selftest') {
       const v = await embedMany(env, ['満月の物語：ページ送り', '予報の履歴の取り込み']);
@@ -48,6 +51,7 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       if (p === '/api/rules/source') return json(await saveSource(env, String(body.repo ?? ''), Array.isArray(body.files) ? body.files as string[] : []));
       if (p === '/api/rules/sync') return json(await syncRules(env, String(body.repo ?? '')));
       if (p === '/api/rules/analyze') return json(await analyze(env));
+      if (p === '/api/export/pr') return json(await exportPr(env, String(body.repo ?? '')));
       if (p === '/api/requests/prompt') return json({ text: body.id ? await consultFor(env, String(body.id)) : await consultPrompt(env, String(body.repo ?? ''), (Array.isArray(body.ops) ? body.ops : []) as never, { title: body.title ? String(body.title) : undefined }) });
       if (p === '/api/requests/comment') return json(await addComment(env, String(body.id ?? ''), 'human', String(body.text ?? '')));
       if (p === '/api/rules/summarize') return json(await summarizeStep(env, String(body.repo ?? ''), Math.min(8, Math.max(1, Number(body.budget) || 4))));

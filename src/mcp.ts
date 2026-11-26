@@ -6,6 +6,7 @@ import { LIST, PLAIN_APPLIES } from './diagnosis.ts';
 import { addComment, contractText, propose, requests as changeRequests, scopeTree, type Op } from './scopes.ts';
 import { embedMany, loadVectors } from './embed.ts';
 import { consultFor } from './consult.ts';
+import { exportPreview, projectInstruction } from './export.ts';
 import { dot } from './vec.ts';
 import { safeEqual } from './util.ts';
 
@@ -106,14 +107,16 @@ const ACTIONS: Record<string, { tool: string; summary: string }> = {
   propose: { tool: 'propose_scope_change', summary: '範囲の木の変更リクエストを出す（反映は人の承認）。args: repo, title, reason, ops' },
   search: { tool: 'search_rules', summary: '意味の近い決まりを探す。args: query, repo?, limit?' },
   consult: { tool: 'consult', summary: '人のピン・書き換え・範囲の変更の相談。args: repo?（承認待ちの一覧）／id（その変更リクエストの相談の中身。原文・書き換えたあと・効いている範囲・意味の近い決まり）' },
+  export: { tool: 'export_preview', summary: 'CLAUDE.md に書き出す道案内（範囲の木から）と、承認した書き換えが当てはまるか。読むだけ（PR は人がアプリで出す）。args: repo' },
+  project: { tool: 'project_instruction', summary: 'claude.ai のプロジェクトに貼る指示文（その範囲の契約をコネクタで読ませる）。args: repo, scope' },
   comment: { tool: 'comment', summary: '変更リクエストに返事を書く（影響と副作用の見立て）。args: id, text' },
 };
 const ENTRY = {
   name: 'idea_flow',
-  description: 'idea-flow のひとつの入口。action と args を渡す。まず action="help" で、いまできること（機能が増えても、この道具のまま使える）を確かめる。主な action：overview（診断書）・consult（人のピンや書き換えの相談）・comment（相談への返事）・xray（場面のレントゲン）・scopes（範囲の木）・contract（範囲の契約）・propose（変更リクエストを出す。反映は人の承認）・findings・read_doc・search。',
+  description: 'idea-flow のひとつの入口。action と args を渡す。まず action="help" で、いまできること（機能が増えても、この道具のまま使える）を確かめる。主な action：overview（診断書）・export（CLAUDE.md に書き出す道案内）・consult（人のピンや書き換えの相談）・comment（相談への返事）・xray（場面のレントゲン）・scopes（範囲の木）・contract（範囲の契約）・propose（変更リクエストを出す。反映は人の承認）・findings・read_doc・search。',
   inputSchema: {
     type: 'object',
-    properties: { action: { type: 'string', description: 'help / overview / consult / comment / findings / read_doc / xray / scopes / contract / propose / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
+    properties: { action: { type: 'string', description: 'help / overview / export / project / consult / comment / findings / read_doc / xray / scopes / contract / propose / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
     required: ['action'], additionalProperties: false,
   },
 };
@@ -247,6 +250,15 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
       }
       return text(L.length ? L.join('\n') + '\n\nid を渡すと、その相談の中身を出します（action="consult", args: {id}）。' : '承認待ちの相談はありません。');
     }
+    case 'export_preview': {
+      const pv = await exportPreview(env, String(a.repo ?? ''));
+      const L = [`${pv.repo}（${pv.branch}）に書き出す内容${pv.canWrite ? '' : '（書き込み用の鍵がまだ無いので、PR は出せません）'}`, ...pv.notes];
+      for (const f of pv.files) L.push('', `■ ${f.path}${f.before == null ? '（新しいファイル）' : ''}`, f.path === 'CLAUDE.md' ? f.after.slice(f.after.indexOf('<!-- idea-flow:start -->')) : '（承認した書き換えを当てたもの）');
+      if (pv.edits.length) L.push('', '■ 承認した書き換え', ...pv.edits.map(e => `- ${e.path}「${e.heading}」：${e.ok ? '当てはまる' : '当てはまらない（' + e.reason + '）'}`));
+      if (!pv.files.length) L.push('書き出すものはありません。');
+      return text(L.join('\n'));
+    }
+    case 'project_instruction': return text(await projectInstruction(env, String(a.repo ?? ''), String(a.scope ?? '')));
     case 'comment': {
       const r = await addComment(env, String(a.id ?? ''), 'ai', String(a.text ?? ''));
       return text(`返事を書きました（${r.id}）。人がアプリで読んで、承認するか決めます。`);
