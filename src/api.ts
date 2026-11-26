@@ -38,12 +38,17 @@ async function mapData(env: Env) {
 }
 
 async function pending(env: Env) {
-  const rows = (await env.DB.prepare(
-    `SELECT s.id, s.kind, s.subject, s.target, s.score, s.detail, s.created_at, c.message, c.committed_at, c.url
-       FROM suggestions s LEFT JOIN commits c ON c.sha = s.subject
-      WHERE s.status = 'pending' ORDER BY s.kind, s.score DESC LIMIT 300`,
-  ).all()).results;
-  return rows.map(r => ({ ...r, detail: JSON.parse(String(r.detail ?? '{}')) }));
+  // 近さの高い順。コミットの振り分けを先に、新しい塊・前提はあとに
+  const [rows, total] = await Promise.all([
+    env.DB.prepare(
+      `SELECT s.id, s.kind, s.subject, s.target, s.score, s.detail, s.created_at, c.message, c.committed_at, c.url
+         FROM suggestions s LEFT JOIN commits c ON c.sha = s.subject
+        WHERE s.status = 'pending'
+        ORDER BY CASE WHEN s.kind IN ('commit_issue','commit_theme') THEN 0 ELSE 1 END, s.score DESC LIMIT 500`,
+    ).all(),
+    env.DB.prepare("SELECT COUNT(*) AS n FROM suggestions WHERE status = 'pending'").first<{ n: number }>(),
+  ]);
+  return { total: total?.n ?? 0, items: rows.results.map(r => ({ ...r, detail: JSON.parse(String(r.detail ?? '{}')) })) };
 }
 
 async function decide(env: Env, body: { id?: string; decision?: string; target?: string }) {
