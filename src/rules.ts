@@ -238,11 +238,12 @@ export async function xray(env: Env, repo: string, scene: string) {
   // 場面に関係するのに届かない決まり（自動でも参照でもスキルでも届かない文書の中で、場面に近いもの）
   // 近さの絶対値はモデルで変わるので、近い順の上位から拾う（遠すぎるものは除く）
   const near = items.filter(i => i.kind !== 'desc').map(i => ({ i, s: sim(i.id) })).filter(x => x.s >= 0.35).sort((a, b) => b.s - a.s).slice(0, 40);
-  const notDelivered = new Map<string, { path: string; best: number; rules: { text: string; line: number; heading: string; score: number }[] }>();
+  const notDelivered = new Map<string, { path: string; best: number; count: number; rules: { text: string; line: number; heading: string; score: number }[] }>();
   for (const { i, s } of near) {
     const d = docs.find(x => x.id === i.doc)!;
     if (delivered.has(d.id) || d.applies === 'skill' || d.external) continue;
-    const e = notDelivered.get(d.id) ?? { path: d.path, best: s, rules: [] };
+    const e = notDelivered.get(d.id) ?? { path: d.path, best: s, count: 0, rules: [] };
+    e.count++;
     if (e.rules.length < 3) e.rules.push({ text: i.text, line: i.line, heading: i.heading, score: Math.round(s * 100) / 100 });
     notDelivered.set(d.id, e);
   }
