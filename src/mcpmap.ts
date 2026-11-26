@@ -1,7 +1,8 @@
 // コネクタ（MCP）の地図の action。Claude が作業の前に読む：全体 → 機能 → Issue の周辺（根拠つき）。
 import type { Env } from './types.ts';
 import { CATALOGS } from './catalogs.ts';
-import { mapView, syncMap } from './workmap.ts';
+import { catalogOf, mapView, syncMap } from './workmap.ts';
+import { selfCheck, WRITING_RULES } from './selfcheck.ts';
 
 type MapData = Extract<Awaited<ReturnType<typeof mapView>>, { catalog: true }>;
 const ST = ['作っている', '落ち着いた', '止まっている'];
@@ -39,6 +40,16 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
     for (let k = 0; k < 4 && !done; k++) { const x = await syncMap(env, repo, 4); n += x.prs; done = x.backfillDone; }
     return `${repo} を GitHub から読み直しました（PR ${n}件${done ? '・過去までさかのぼり済み' : '・さかのぼりの途中'}）。`;
   }
+  if (action === 'rules') {
+    const repo = repoOf(a), cat = catalogOf(repo);
+    if (!cat) throw new Error(`${repo} には機能の一覧（カタログ）がありません`);
+    let g = '';
+    const L = [WRITING_RULES, '', `■ ${repo} で使える機能名（PR・Issue の題の頭と「機能：」に使う）`];
+    for (const f of cat.features) { if (f.group !== g) { g = f.group; L.push(`【${g}】`); } L.push(`- ${f.name}${f.aliases.length ? `（別名：${f.aliases.join('・')}）` : ''}：${f.desc}`); }
+    L.push('', '出す前に action="check"（kind・title・body・files）、出したあとに action="check"（pr か issue の番号）で自己チェックする。');
+    return L.join('\n');
+  }
+  if (action === 'check') return await selfCheck(env, repoOf(a), a);
   const d = await load(env, a, Math.min(60, Math.max(7, Number(a.span) || 21)));
   const c = d.counts;
   if (action === 'map') {
