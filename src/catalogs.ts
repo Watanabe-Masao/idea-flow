@@ -797,9 +797,9 @@ export const CATALOGS: Record<string, Catalog> = {
    "id": "base",
    "group": "裏方",
    "name": "土台（API・GitHub・設定）",
-   "desc": "API の入口・GitHub とのやり取り・Worker の設定・表（マイグレーション）",
+   "desc": "API の入口・GitHub とのやり取り・Worker の設定（画面のファイルの配り方を含む）・表（マイグレーション）",
    "files": [
-    "(^src/api\\.ts|^src/gh\\.ts|^src/index\\.ts|^src/util\\.ts|^src/types\\.ts|^wrangler\\.jsonc|^migrations/)"
+    "(^src/api\\.ts|^src/gh\\.ts|^src/index\\.ts|^src/util\\.ts|^src/types\\.ts|^wrangler\\.jsonc|^migrations/|^public/_headers$)"
    ],
    "data": [
     "gh",
