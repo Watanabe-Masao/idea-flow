@@ -89,22 +89,39 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
   assert.equal(i(9).open, false);
   assert.deepEqual(v.unmatched.map((p: any) => p.n), [6]);
   assert.deepEqual(v.counts, { prs: 5, building: 1, settled: 1, stopped: 1, openIssues: 2, stale: 1, unused: 1 });
+  const { mapAction } = await import('../src/mcpmap.ts');
+  const real2 = globalThis.fetch; globalThis.fetch = (async () => { throw new Error('読み直さないはず'); }) as typeof fetch;
+  try {
+    assert.match(await mapAction(env, 'map', { repo: 'o/r' }), /満月の物語（絵本）（id=story）：/);
+    assert.match(await mapAction(env, 'issue', { repo: 'o/r', n: '#7' }), /つながり（0）/);
+    assert.match(await mapAction(env, 'feature', { repo: 'o/r', id: 'feel' }), /#8 βモデル 段階4.*［古くなっている候補］/);
+    await assert.rejects(mapAction(env, 'issue', { repo: 'o/r', n: 99 }), /#99 は取り込まれていません/);
+  } finally { globalThis.fetch = real2; }
   delete CATALOGS['o/r'];
 });
 
-test('Issue とマージのつながり：閉じると書いたもの・題と説明の「#数字」（Issue の番号だけ、古い順）', async () => {
-  const { prsByIssue } = await import('../src/workmap.ts');
-  const p = (number: number, day: string, title: string, body: string, closes: number[] = []) => ({ number, title, url: 'u' + number, merged_at: day + 'T03:00:00Z', files: [], body, closes });
-  const m = prsByIssue([
-    p(30, '2026-11-20', '満月の物語：残り（#11 の続き）', '関連：#12、PR #29'),
-    p(20, '2026-11-18', 'はじめ', 'Closes #11', [11]),
-    p(31, '2026-11-21', 'ほか', 'see https://x/#11 と &#11;'),
-  ], new Set([11, 12]));
-  assert.deepEqual(m.get(11)!.map(x => [x.n, x.closes]), [[20, true], [30, false]]);
-  assert.deepEqual(m.get(12)!.map(x => x.n), [30]);
-  assert.equal(m.has(29), false);
+test('Issue のつながり：閉じた・明示（PR と Issue の本文）・引き継ぎ・推測（同じ機能で、番号の無いもの）', async () => {
+  const { issueLinks, refLines } = await import('../src/workmap.ts');
+  const p = (number: number, day: string, title: string, body: string, files: string[], features: string[], closes: number[] = []) => ({ number, title, url: 'u' + number, merged_at: day + 'T03:00:00Z', files, body, closes, features });
+  const I = (number: number, open: boolean, title: string, body: string, features: string[]) => ({ number, open, title, created: '2026-11-18T00:00:00Z', closed: open ? null : '2026-11-20T00:00:00Z', features, refs: refLines(body) });
+  const m = issueLinks('o/r', [
+    I(11, true, 'コールドムーンの絵本', '作業：PR-1 文章（#17）', ['story']),
+    I(12, false, '欠けの対策', '', ['store']),
+    I(13, false, 'データの整合性：週1回の監査（#12 P2）', '関連：#11', ['store']),
+  ], [
+    p(17, '2026-11-19', '文章とデータ', '', ['src/ui/MoonStory.tsx'], ['story']),
+    p(20, '2026-11-19', 'はじめ', 'Closes #12', ['worker/a.ts'], ['store'], [12]),
+    p(30, '2026-11-21', '満月の物語：止める', 'コールドムーンの見本で見つけた', ['src/ui/MoonStory.tsx'], ['story']),
+    p(31, '2026-11-22', '満月の物語：別件', '関連 #13', ['src/ui/MoonStory.tsx'], ['story']),
+    p(40, '2026-11-10', '満月の物語：前', '', ['src/ui/MoonStory.tsx'], ['story']),
+  ]);
+  const k = (n: number) => m.get(n)!.map(l => `${l.kind}:${l.type}${l.n}`);
+  assert.deepEqual(k(11), ['ref:issue13', 'ref:pr17', 'candidate:pr30']);   // #31 はほかの Issue を指すので候補にしない・#40 は開く前
+  assert.deepEqual(k(12), ['child:issue13', 'closes:pr20']);
+  assert.deepEqual(k(13), ['parent:issue12', 'ref:issue11', 'ref:pr31']);
+  assert.match(m.get(11)![1].evidence[0], /Issue #11 の本文：作業：PR-1 文章（#17）/);
+  assert.match(m.get(11)!.at(-1)!.evidence[0], /同じ機能のファイルを変えた（src\/ui\/MoonStory.tsx）/);
 });
-
 test('PR の説明から申告を読む（見出しの名前で。なしは空）', () => {
   const r = parseReport('変えたこと\n\n## 確かめた決まり\n- `docs/moon.md`「動き」\n- `docs/design.md`「2.1 文字」\n## 決まりになく、自分で判断した所\n- 折る位置を空白にした\n## 足りなかった決まり\n- なし\n');
   assert.deepEqual(r, { read: ['`docs/moon.md`「動き」', '`docs/design.md`「2.1 文字」'], own: ['折る位置を空白にした'], lack: [] });
