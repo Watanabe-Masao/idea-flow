@@ -50,6 +50,11 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
       const open = d.issues.filter(i => i.open && i.features.includes(f.id)).length;
       L.push(`- ${f.name}（id=${f.id}）：${ST[f.state]}・この期間 ${f.span}件・最後 ${md(f.last)}${open ? `・開いている Issue ${open}` : ''}`);
     }
+    const w = d.writing;
+    L.push('', `■ 書き方の守り具合（この期間の PR ${w.prs}件・立てた Issue ${w.issues}件）`,
+      `PR：題の頭に機能名 ${w.prTitle}/${w.prs}・Issue の番号 ${w.prLinked}/${w.prs}・申告の3つの見出し ${w.prReport}/${w.prs}`,
+      `Issue：「機能：」${w.issueFeature}/${w.issues}・「閉じる条件：」${w.issueClose}/${w.issues}`,
+      ...w.misses.slice(0, 8).map(m => `- ${m.type === 'pr' ? 'PR' : 'Issue'} #${m.n} ${m.t}：足りない ${m.miss.join('・')}`));
     const stale = d.issues.filter(i => i.stale);
     if (stale.length) L.push('', '■ 古くなっている候補（つながる機能がすべて止まっていて、7日以上動いていない）', ...stale.map(i => '- ' + issueLine(d, i)));
     if (d.unmatched.length) L.push('', `■ どの機能にも当たらない作業（カタログに機能を足すかの材料）`, ...d.unmatched.slice(0, 10).map(p => `- #${p.n} ${md(p.day)} ${p.t}`));
