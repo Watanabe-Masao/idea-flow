@@ -145,7 +145,8 @@ export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | '
       let after = st.upd_cursor, caught = false;
       for (let k = 0; k < 4; k++) {
         const rp = (await graphql<PrPage>(env, PR_Q, { o, n, after, dir: 'DESC', field: 'UPDATED_AT' })).repository.pullRequests;
-        stmts.push(...save(rp.nodes)); res.updated += rp.nodes.length;
+        // 数えるのは前回の境界より新しく動いたものだけ（ページの残りは、もう持っている分）
+        stmts.push(...save(rp.nodes)); res.updated += rp.nodes.filter(p => !boundary || (p.updatedAt ?? '') >= boundary).length;
         if (!boundary || rp.nodes.some(p => (p.updatedAt ?? '') < boundary) || !rp.pageInfo.hasNextPage) { caught = true; break; }
         after = rp.pageInfo.endCursor;
       }
@@ -319,7 +320,7 @@ const addDays = (day: string, n: number) => new Date(Date.parse(day + 'T00:00:00
 
 /**
  * 地図の中身。span 日分（今日まで、日本時間）の稼働と、状態：
- * 直近7日に作業なし＝止まっている（2）、直近4日に3件以上＝作っている（0）、それ以外＝落ち着いた（1）
+ * 直近4日に3件以上マージ（0）、直近7日にマージあり（1）、直近7日マージなし（2）
  */
 export async function mapView(env: Env, repo: string, span = 21, today = jstDay(nowIso())) {
   const cat = catalogOf(repo);

@@ -71,7 +71,7 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
       `Issue：「機能：」${w.issueFeature}/${w.issues}・「閉じる条件：」${w.issueClose}/${w.issues}`,
       ...w.misses.slice(0, 8).map(m => `- ${m.type === 'pr' ? 'PR' : 'Issue'} #${m.n} ${m.t}：足りない ${m.miss.join('・')}`));
     const stale = d.issues.filter(i => i.stale);
-    if (stale.length) L.push('', '■ 古くなっている候補（つながる機能がすべて止まっていて、7日以上動いていない）', ...stale.map(i => '- ' + issueLine(d, i)));
+    if (stale.length) L.push('', '■ 古くなっている候補（つながる機能がすべて直近7日マージなしで、7日以上動いていない）', ...stale.map(i => '- ' + issueLine(d, i)));
     if (d.topics.length) L.push('', `■ 話題（タグ）${d.topics.length}：${d.topics.slice(0, 15).map(t => `${t.name}（${t.issues.length + t.prs.length}）`).join('、')}`);
     if (d.unmatched.length) L.push('', `■ どの機能にも当たらない作業（カタログに機能を足すかの材料）`, ...d.unmatched.slice(0, 10).map(p => `- #${p.n} ${md(p.day)} ${p.t}`));
     L.push('', '機能の中身は action="feature"（args: id）、Issue の周辺は action="issue"（args: n）。');
