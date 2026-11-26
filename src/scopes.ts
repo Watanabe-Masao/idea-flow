@@ -12,7 +12,10 @@ export type Op =
   | { op: 'attach'; scope: string; path: string }
   | { op: 'detach'; scope: string; path: string }
   | { op: 'add_exception'; scope: string; path: string; heading: string; why?: string }
-  | { op: 'remove_exception'; scope: string; path: string; heading: string };
+  | { op: 'remove_exception'; scope: string; path: string; heading: string }
+  // 決まりの中身への依頼。範囲の木は変えない（承認しても記録だけ。リポジトリへの反映は別の手順）
+  | { op: 'pin'; path: string; heading: string; item?: string; line?: number; note?: string }
+  | { op: 'edit'; path: string; heading: string; item?: string; line?: number; before: string; after: string; note?: string };
 
 const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,30}$/;
 const sid = (repo: string, key: string) => `${repo}|${key}`;
@@ -44,10 +47,26 @@ export function effective(tree: Tree, id: string) {
   return { chain: c.map(s => s.name), docs: [...docs].map(([path, from]) => ({ path, from })), exceptions };
 }
 
+/**
+ * 例外の書き方：
+ *  - '*'                      文書まるごと
+ *  - '見出し'                 その見出し（と、markdown でその下にある見出し）の決まり
+ *  - '見出しの道筋 ¶ 決まりの頭' 決まり1つだけ（決まりの文の先頭 40 文字で見分ける）
+ */
+export const ITEM_SEP = ' ¶ ';
+export const itemHead = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 40);
+export const itemException = (heading: string, text: string) => `${heading}${ITEM_SEP}${itemHead(text)}`;
+
 /** 決まりの単位（見出しの道筋つき）が、例外で外れるか */
-export function excluded(exceptions: { path: string; heading: string }[], path: string, heading: string) {
+export function excluded(exceptions: { path: string; heading: string }[], path: string, heading: string, text = '') {
   const segs = heading.split(' › ');
-  return exceptions.some(e => e.path === path && (e.heading === '*' || segs.some(s => s.startsWith(e.heading))));
+  return exceptions.some(e => {
+    if (e.path !== path) return false;
+    if (e.heading === '*') return true;
+    const k = e.heading.indexOf(ITEM_SEP);
+    if (k >= 0) return heading === e.heading.slice(0, k) && itemHead(text).startsWith(e.heading.slice(k + ITEM_SEP.length));
+    return segs.some(s => s.startsWith(e.heading));
+  });
 }
 
 function check(op: Op) {
@@ -58,6 +77,10 @@ function check(op: Op) {
     case 'move_scope': if (!k(op.key) || !k(op.parent) || op.key === 'root') throw new Error('範囲を動かす：key と parent が必要です'); break;
     case 'attach': case 'detach': if (!k(op.scope) || !String(op.path ?? '').endsWith('.md')) throw new Error('文書を付ける・外す：scope と .md の path が必要です'); break;
     case 'add_exception': case 'remove_exception': if (!k(op.scope) || !String(op.path ?? '').endsWith('.md') || !String(op.heading ?? '').trim()) throw new Error('例外：scope・path・heading が必要です'); break;
+    case 'pin': case 'edit':
+      if (!String(op.path ?? '').endsWith('.md') || typeof op.heading !== 'string') throw new Error('ピン・書き換え：path（.md）と heading が必要です');
+      if (op.op === 'edit' && (typeof op.before !== 'string' || typeof op.after !== 'string' || op.after.length > 20000)) throw new Error('書き換え：before と after（2万字まで）が必要です');
+      break;
     default: throw new Error(`知らない操作です：${(op as { op: string }).op}`);
   }
 }
@@ -166,9 +189,20 @@ export async function requests(env: Env, repo: string) {
     const ops = JSON.parse(r.ops) as Op[];
     let pv: unknown = null, error: string | null = null;
     if (r.status === 'pending') { try { pv = await preview(env, repo, ops); } catch (e) { error = e instanceof Error ? e.message : String(e); } }
-    out.push({ ...r, ops, preview: pv, error });
+    const comments = (await env.DB.prepare('SELECT id, by, text, at FROM request_comments WHERE request_id = ? ORDER BY at').bind(r.id).all()).results;
+    out.push({ ...r, ops, preview: pv, error, comments });
   }
   return out;
+}
+
+/** 変更リクエストへの返事（人・Claude）。Claude は差分を読んで、影響と副作用を書く */
+export async function addComment(env: Env, requestId: string, by: 'human' | 'ai', body: string) {
+  const t = String(body ?? '').trim();
+  if (!t) throw new Error('返事が空です');
+  if (!(await env.DB.prepare('SELECT id FROM change_requests WHERE id = ?').bind(requestId).first())) throw new Error('変更リクエストが見つかりません');
+  const id = newId('cm');
+  await env.DB.prepare('INSERT INTO request_comments (id, request_id, by, text, at) VALUES (?, ?, ?, ?, ?)').bind(id, requestId, by, t.slice(0, 8000), nowIso()).run();
+  return { id };
 }
 
 /** その範囲で Claude に渡す内容（契約）。文書と例外を、引き継ぎ元つきで */
@@ -179,7 +213,7 @@ export function contractText(repo: string, tree: Tree, id: string) {
   const L = [`範囲：${e.chain.join(' › ')}（${repo}）`, s.note ? `説明：${s.note}` : '', '', '■ この範囲で守る決まり（文書）'];
   for (const d of e.docs) L.push(`・${d.path}（${d.from}から）`);
   if (!e.docs.length) L.push('・なし');
-  if (e.exceptions.length) { L.push('', '■ この範囲では使わない部分（例外）'); for (const x of e.exceptions) L.push(`・${x.path} の「${x.heading === '*' ? '全体' : x.heading}」${x.why ? '：' + x.why : ''}（${x.from}で決めた）`); }
+  if (e.exceptions.length) { L.push('', '■ この範囲では使わない部分（例外）'); for (const x of e.exceptions) L.push(`・${x.path} の「${x.heading === '*' ? '全体' : x.heading.includes(ITEM_SEP) ? x.heading.replace(ITEM_SEP, '」の決まり「') + '…' : x.heading}」${x.why ? '：' + x.why : ''}（${x.from}で決めた）`); }
   if (others.length) L.push('', '■ 範囲外', `・${others.join('、')} の決まりは持ち込まない`);
   L.push('・決まりでまかなえないことが出たら、作らずに「不足」として伝える');
   return L.filter((l, i) => l !== '' || i > 1).join('\n');

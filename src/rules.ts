@@ -1,7 +1,7 @@
 // 決まりの見える化（#8）。リポジトリから決まりの文書を読み、単位に分け、意味の近さで問題を探す。
 // GitHub には書き込まない。人が「問題ではない」と決めたものは rule_dismissed に残る。
 import type { Env } from './types.ts';
-import { classify, defaultPick, externalByLicense, frontmatter, parseRules, resolveRef, termsOf, TEMP_WORDS, NEG_WORDS } from './rules-parse.ts';
+import { classify, defaultPick, externalByLicense, frontmatter, parseRules, sectionsOf, resolveRef, termsOf, TEMP_WORDS, NEG_WORDS } from './rules-parse.ts';
 import { audit, depsOf, type AuditHit } from './audit.ts';
 import { embedMany, loadVectors, upsertEmbeddings } from './embed.ts';
 import { dot, type Vec } from './vec.ts';
@@ -77,7 +77,7 @@ export async function syncRules(env: Env, repo: string) {
   const extAuto = new Map(info.files.map(f => [f.path, f.external]));
   const extHuman = new Map((await env.DB.prepare('SELECT path, external FROM rule_external WHERE repo = ?').bind(repo).all<{ path: string; external: number }>()).results.map(r => [r.path, !!r.external]));
   const now = nowIso();
-  const docRows: unknown[][] = [], itemRows: unknown[][] = [];
+  const docRows: unknown[][] = [], itemRows: unknown[][] = [], secRows: unknown[][] = [];
   // .md を全部（と package.json）まとめて読む。読めなければ、選んだものだけ1つずつ読む
   const mdAll = info.files.map(f => f.path);
   const bulk = await readMany(env, repo, info.branch, [...mdAll, ...(info.all.includes('package.json') ? ['package.json'] : [])]);
@@ -90,13 +90,16 @@ export async function syncRules(env: Env, repo: string) {
     const id = `${repo}|${path}`;
     const ext = extHuman.has(path) ? extHuman.get(path)! : !!extAuto.get(path);
     docRows.push([id, repo, path, (await sha256(src)).slice(0, 16), c.kind, c.applies, c.scope, p.title, p.description, JSON.stringify(p.refs), now, ext ? 1 : 0, extHuman.has(path) ? 'human' : ext ? 'auto' : null]);
+    for (const sc of sectionsOf(src)) secRows.push([id, sc.heading, sc.line, sc.md.slice(0, 20000)]);
     for (const it of p.items) itemRows.push([(await sha256(`${id}|${it.n}|${it.text}`)).slice(0, 20), id, it.n, it.heading, it.text.slice(0, 1200), it.line, it.kind]);
   }
   await env.DB.batch([
     env.DB.prepare('DELETE FROM rule_items WHERE doc IN (SELECT id FROM rule_docs WHERE repo = ?)').bind(repo),
+    env.DB.prepare('DELETE FROM rule_sections WHERE doc IN (SELECT id FROM rule_docs WHERE repo = ?)').bind(repo),
     env.DB.prepare('DELETE FROM rule_docs WHERE repo = ?').bind(repo),
     ...bulkInsert(env.DB, 'INSERT INTO rule_docs (id, repo, path, sha, kind, applies, scope, title, description, refs, synced_at, external, external_by) VALUES', 13, docRows),
     ...bulkInsert(env.DB, 'INSERT OR IGNORE INTO rule_items (id, doc, n, heading, text, line, kind) VALUES', 7, itemRows),
+    ...bulkInsert(env.DB, 'INSERT OR IGNORE INTO rule_sections (doc, heading, line, md) VALUES', 4, secRows),
     env.DB.prepare('UPDATE rule_sources SET synced_at = ?, files = ? WHERE repo = ?').bind(now, JSON.stringify(picked), repo),
   ]);
   await env.DB.prepare('INSERT OR IGNORE INTO rule_sources (repo, branch, files, synced_at) VALUES (?, ?, ?, ?)').bind(repo, info.branch, JSON.stringify(picked), now).run();
@@ -295,7 +298,7 @@ export async function xray(env: Env, repo: string, scene: string, scopeKey = '')
   if (scopeKey && !sc) throw new Error(`範囲 ${scopeKey} がありません`);
   const eff = sc ? effective(tree, sc.id) : null;
   const scopeDocs = new Set((eff?.docs ?? []).map(d => d.path));
-  const isEx = (i: Item) => !!eff && excluded(eff.exceptions, docs.find(d => d.id === i.doc)!.path, i.heading);
+  const isEx = (i: Item) => !!eff && excluded(eff.exceptions, docs.find(d => d.id === i.doc)!.path, i.heading, i.text);
   const count = (id: string) => items.filter(i => i.doc === id).length;
   const docInfo = (d: Doc) => ({ path: d.path, items: count(d.id), external: !!d.external });
 

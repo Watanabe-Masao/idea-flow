@@ -87,6 +87,31 @@ export function parseRules(src: string, kind: DocKind): { title: string | null; 
   return { title, description: fm.meta.description ?? null, items: items.map((it, k) => ({ ...it, n: k })), refs };
 }
 
+/**
+ * 見出しごとの原文（markdown のまま）。heading は parseRules の決まりの単位と同じ書き方。
+ * 画面で「原文を見る」と、決まり1つの元の書き方（箇条書きのまとまり）を出すのに使う。
+ */
+export function sectionsOf(src: string): { heading: string; line: number; md: string }[] {
+  const fm = frontmatter(src);
+  const lines = fm.body.split(/\r?\n/);
+  // line は見出しの行。本文の1行目は line + 1（見出しの前の部分は、front matter の後ろから）
+  const out: { heading: string; line: number; md: string[] }[] = [{ heading: '', line: fm.offset, md: [] }];
+  const stack: string[] = [];
+  let fence = false;
+  lines.forEach((raw, i) => {
+    if (/^\s*(```|~~~)/.test(raw)) fence = !fence;
+    const h = !fence && raw.match(/^(#{1,6})\s+(.+)$/);
+    if (h) {
+      const lv = h[1].length, txt = clean(h[2]);
+      stack.length = Math.max(0, lv - 1); stack[lv - 1] = lv === 1 ? '' : txt;
+      out.push({ heading: stack.filter(Boolean).join(' › '), line: i + 1 + fm.offset, md: [] });
+      return;
+    }
+    out[out.length - 1].md.push(raw);
+  });
+  return out.map(s => ({ ...s, md: s.md.join('\n').replace(/\s+$/, '') })).filter((s, i) => s.md.trim() || i > 0);
+}
+
 /** 一時的な決まりらしい言葉。ドメインの言葉（気象の「暫定値」など）にも当たるので、候補として人が確かめる */
 export const TEMP_WORDS = /今回|当面|一旦|いったん|暫定|とりあえず|しばらく|まずは|今は|仮に|あとで|TODO|FIXME/;
 export const NEG_WORDS = /ない|しない|使わない|禁止|やめる|不要|避ける|書かない|入れない/;
