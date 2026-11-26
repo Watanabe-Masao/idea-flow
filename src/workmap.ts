@@ -88,7 +88,10 @@ function linkIssueBase(cat: Catalog, i: { number: number; title: string; body: s
   return { features: ids, nodes: [], how: ids.length ? '題の言葉' : '' };
 }
 
+/** 計測（#44）：GitHub へ問い合わせた回数。同じ isolate で同時に走った分が混ざることがある（目安） */
+let gqlCalls = 0;
 async function graphql<T>(env: Env, query: string, variables: Record<string, unknown>): Promise<T> {
+  gqlCalls++;
   let last = 'GitHub を読む鍵（GITHUB_TOKEN）がありません';
   for (const token of [env.GITHUB_TOKEN, env.GITHUB_WRITE_TOKEN].filter((t, k, a) => t && a.indexOf(t) === k) as string[]) {
     const res = await fetch('https://api.github.com/graphql', { method: 'POST', headers: { ...ghHeaders(token), 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) });
@@ -115,20 +118,20 @@ type SyncRow = { pr_cursor: string | null; pr_done: number; prs_at: string | nul
 export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | 'backfill'; pages?: number } | number = {}) {
   if (!REPO_RE.test(repo)) throw new Error('リポジトリの名前が正しくありません');
   const o2 = typeof opt === 'number' ? { mode: 'backfill' as const, pages: opt } : opt;
-  const mode = o2.mode ?? 'update', pages = o2.pages ?? 4;
+  const mode = o2.mode ?? 'update', pages = o2.pages ?? 4, t0 = Date.now(), c0 = gqlCalls;
   const [o, n] = repo.split('/');
   const now = nowIso(), id = crypto.randomUUID(), until = new Date(Date.now() + 120_000).toISOString();
   await env.DB.prepare('INSERT OR IGNORE INTO map_sync (repo, pr_done) VALUES (?, 0)').bind(repo).run();
   await env.DB.prepare('UPDATE map_sync SET sync_id = ?, sync_until = ? WHERE repo = ? AND (sync_id IS NULL OR sync_until < ?)').bind(id, until, repo, now).run();
   const st = await env.DB.prepare('SELECT * FROM map_sync WHERE repo = ?').bind(repo).first<SyncRow>();
-  if (st?.sync_id !== id) return { mode, busy: true, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st?.pr_done, caughtUp: false, issuesMore: false };
+  if (st?.sync_id !== id) return { mode, busy: true, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st?.pr_done, caughtUp: false, issuesMore: false, calls: 0, ms: Date.now() - t0 };
   const mine = 'EXISTS (SELECT 1 FROM map_sync WHERE repo = ? AND sync_id = ?)';
   const save = (nodes: PrPage['repository']['pullRequests']['nodes']) => nodes.map(p => env.DB.prepare(
     `INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${mine}
      ON CONFLICT(repo, number) DO UPDATE SET title = excluded.title, body = excluded.body, files = excluded.files, fetched_at = excluded.fetched_at, closes = excluded.closes`)
     .bind(repo, p.number, p.title, p.url, p.mergedAt, p.body ?? '', JSON.stringify((p.files?.nodes ?? []).map(f => f.path)), now, JSON.stringify((p.closingIssuesReferences?.nodes ?? []).map(x => x.number)), repo, id));
   const stmts: D1PreparedStatement[] = [];
-  const res = { mode, busy: false, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st.pr_done, caughtUp: false, issuesMore: false };
+  const res = { mode, busy: false, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st.pr_done, caughtUp: false, issuesMore: false, calls: 0, ms: 0 };
   try {
     if (mode === 'backfill') {
       let cursor = st.pr_cursor, done = !!st.pr_done;
@@ -170,6 +173,7 @@ export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | '
     await env.DB.prepare('UPDATE map_sync SET sync_id = NULL, sync_until = NULL WHERE repo = ? AND sync_id = ?').bind(repo, id).run();
     throw e;
   }
+  res.calls = gqlCalls - c0; res.ms = Date.now() - t0; // 計測（#44）。Workers の時計は外とのやり取りで進むので、待ち時間の目安
   return res;
 }
 

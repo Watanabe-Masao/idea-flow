@@ -39,9 +39,9 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
     const repo = repoOf(a);
     const u = await syncMap(env, repo, { mode: 'update' });
     if (u.busy) return `${repo} はいま別の読み込みの途中です。少し待ってから読んでください（保存済みの地図はそのまま読めます）。`;
-    let b = 0, done = u.backfillDone;
-    for (let k = 0; k < 4 && !done; k++) { const x = await syncMap(env, repo, { mode: 'backfill', pages: 4 }); if (x.busy) break; b += x.backfilled; done = x.backfillDone; }
-    return `${repo} を GitHub から読み直しました。最近の更新 ${u.updated}件${u.caughtUp ? '（前回まで追いついた）' : '（まだ続きあり。次の読み直しで続きから）'}・Issue ${u.issues}件${u.issuesMore ? '（1000件で止めた）' : ''}・さかのぼり ${b}件${done ? '（過去まで済み）' : '（途中）'}。`;
+    let b = 0, done = u.backfillDone, calls = u.calls, ms = u.ms;
+    for (let k = 0; k < 4 && !done; k++) { const x = await syncMap(env, repo, { mode: 'backfill', pages: 4 }); if (x.busy) break; b += x.backfilled; done = x.backfillDone; calls += x.calls; ms += x.ms; }
+    return `${repo} を GitHub から読み直しました。最近の更新 ${u.updated}件${u.caughtUp ? '（前回まで追いついた）' : '（まだ続きあり。次の読み直しで続きから）'}・Issue ${u.issues}件${u.issuesMore ? '（1000件で止めた）' : ''}・さかのぼり ${b}件${done ? '（過去まで済み）' : '（途中）'}。\n計測：GitHub に ${calls}回・${(ms / 1000).toFixed(1)}秒。`;
   }
   if (action === 'rules') {
     const repo = repoOf(a), cat = catalogOf(repo);
