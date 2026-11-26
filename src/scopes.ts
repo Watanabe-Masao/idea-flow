@@ -72,6 +72,12 @@ export async function propose(env: Env, repo: string, by: 'human' | 'ai', title:
   return { id, preview: await preview(env, repo, ops) };
 }
 
+/** 下書きを今の木に重ねた結果の木（画面で、作りかけの木を見せるため） */
+export async function draftTree(env: Env, repo: string, ops: Op[]) {
+  ops.forEach(check);
+  return applyInMemory(repo, structuredClone(await scopeTree(env, repo)), ops);
+}
+
 /** 反映したらどうなるか（範囲ごとに、効き始める文書・効かなくなる文書） */
 export async function preview(env: Env, repo: string, ops: Op[]) {
   const before = await scopeTree(env, repo);
@@ -177,4 +183,57 @@ export function contractText(repo: string, tree: Tree, id: string) {
   if (others.length) L.push('', '■ 範囲外', `・${others.join('、')} の決まりは持ち込まない`);
   L.push('・決まりでまかなえないことが出たら、作らずに「不足」として伝える');
   return L.filter((l, i) => l !== '' || i > 1).join('\n');
+}
+
+/**
+ * 範囲の木のたたき台（下書きに入れる ops）。決まった答えではなく、人が直す前提の案。
+ * - ほかの文書からいちばん多く参照されている「まとめ役」（2件以上から）は全体（root）に付ける
+ * - まとめ役を除いた参照のつながりで文書をまとめ、まとまりごとに範囲を1つ作る（名前は中心の文書の題）
+ * - スキル（とスキルのフォルダの README）は、名前が本文に出てくる文書の範囲に付ける
+ */
+export async function suggestTree(env: Env, repo: string) {
+  const docs = (await env.DB.prepare('SELECT path, title, applies, external, refs FROM rule_docs WHERE repo = ?').bind(repo).all<{ path: string; title: string | null; applies: string; external: number; refs: string }>()).results;
+  if (!docs.length) throw new Error('先に取り込んでください');
+  const items = (await env.DB.prepare('SELECT d.path, i.text FROM rule_items i JOIN rule_docs d ON d.id = i.doc WHERE d.repo = ?').bind(repo).all<{ path: string; text: string }>()).results;
+  const { resolveRef } = await import('./rules-parse.ts');
+  const plain = docs.filter(d => d.applies === 'referenced' && !/(^|\/)\.claude\//.test(d.path));
+  const known = new Set(docs.map(d => d.path));
+  const edges = new Map<string, Set<string>>(plain.map(d => [d.path, new Set<string>()]));
+  for (const d of plain) for (const r of JSON.parse(d.refs) as string[]) { const t = resolveRef(d.path, r, known); if (t && t !== d.path && edges.has(t)) edges.get(d.path)!.add(t); }
+  const indeg = (p: string) => [...edges.values()].filter(s => s.has(p)).length;
+  const hubCand = [...plain].sort((a, b) => indeg(b.path) - indeg(a.path))[0];
+  const hub = hubCand && indeg(hubCand.path) >= 2 ? hubCand.path : null;
+  // まとめ役を除いたつながり（向きを無視）で、まとまりを作る
+  const rest = plain.map(d => d.path).filter(p => p !== hub);
+  const parent = new Map(rest.map(p => [p, p]));
+  const find = (p: string): string => (parent.get(p) === p ? p : find(parent.get(p)!));
+  for (const p of rest) for (const t of edges.get(p)!) if (parent.has(t)) parent.set(find(p), find(t));
+  const groups = new Map<string, string[]>();
+  for (const p of rest) (groups.get(find(p)) ?? groups.set(find(p), []).get(find(p))!).push(p);
+  const ops: Op[] = [];
+  if (hub) ops.push({ op: 'attach', scope: 'root', path: hub });
+  const scopeOf = new Map<string, string>();
+  let n = 0;
+  for (const g of [...groups.values()].sort((a, b) => b.length - a.length)) {
+    // 中心＝決まりが多く、まとまりの中でよく参照されている文書。その題を範囲の名前にする
+    const nItems = (p: string) => items.filter(i => i.path === p).length;
+    const inG = (p: string) => g.filter(x => edges.get(x)!.has(p)).length; // まとまりの中で参照されている数（まとめ役からの参照は数えない）
+    const center = [...g].sort((a, b) => (nItems(b) + 10 * inG(b)) - (nItems(a) + 10 * inG(a)) || a.localeCompare(b))[0];
+    const title = (docs.find(d => d.path === center)?.title ?? center.split('/').pop()!.replace(/\.md$/i, '')).replace(/[（(].*$/, '').replace(/[：:].*$/, '').trim().slice(0, 24);
+    const key = 'g' + (++n);
+    ops.push({ op: 'add_scope', key, name: title || key });
+    for (const p of g) { ops.push({ op: 'attach', scope: key, path: p }); scopeOf.set(p, key); }
+  }
+  // スキル：名前（例 gsap）が本文に出てくる文書の範囲へ
+  const skills = docs.filter(d => d.applies === 'skill');
+  const stems = new Map<string, string[]>();
+  for (const sk of skills) { const stem = (sk.title ?? sk.path.split('/').slice(-2)[0]).split(/[-_]/)[0].toLowerCase(); if (stem.length >= 3) (stems.get(stem) ?? stems.set(stem, []).get(stem)!).push(sk.path); }
+  for (const [stem, paths] of stems) {
+    const targets = new Set<string>();
+    for (const it of items) if (scopeOf.has(it.path) && it.text.toLowerCase().includes(stem)) targets.add(scopeOf.get(it.path)!);
+    const dir = paths[0].split('/').slice(0, -2).join('/');
+    const readme = docs.find(d => d.path === `${dir}/README.md`);
+    for (const t of targets) { for (const p of paths) ops.push({ op: 'attach', scope: t, path: p }); if (readme) ops.push({ op: 'attach', scope: t, path: readme.path }); }
+  }
+  return { ops, hub };
 }
