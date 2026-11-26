@@ -3,7 +3,7 @@
   "name": "idea-flow",
   "main": "src/index.ts",
   "compatibility_date": "2025-11-01",
-  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/mcp/*"] },
   "ai": { "binding": "AI" },
   "d1_databases": [
     {

@@ -159,8 +159,8 @@ async function saveSets(b){await api('/api/settings',{method:'POST',body:JSON.st
 // ── 決まりの見える化（#8） ──
 let RV=null,RDOC=null,RF='all';
 const APPLIES={always:'自動で読まれる',role:'役割として読まれる',skill:'説明文で読まれる（スキル）',referenced:'参照されたときだけ'};
-const FK={duplicate:'重複',conflict:'食い違いの候補',temporary:'一時的な決まりの残り',skill_overlap:'読み込まれ方が重なるスキル',unreferenced:'どこからも読まれない文書'};
-const FHELP={duplicate:'別の文書に、ほぼ同じ決まりがある。直すとき片方だけ変わる危険',conflict:'近い話題で、片方だけが「しない」と言っている。人が確かめる',temporary:'「今回」「当面」などを含む。工程が終わったのに残っていないか（気象の「暫定」などドメインの言葉にも当たる）',skill_overlap:'説明文が似ていて、間違った場面で読まれやすい',unreferenced:'CLAUDE.md など自動で読まれる文書からたどれない。会話で渡さない限り効かない'};
+const FK={duplicate:'重複',definition:'定義が分かれている',conflict:'食い違いの候補',temporary:'一時的な決まりの残り',skill_overlap:'読み込まれ方が重なるスキル',unreferenced:'どこからも読まれない文書'};
+const FHELP={duplicate:'別の文書に、ほぼ同じ決まりがある。直すとき片方だけ変わる危険',definition:'同じ言葉を別々の文書で説明している。片方だけ直すと意味がずれる',conflict:'近い話題で、片方だけが「しない」と言っている。人が確かめる',temporary:'「今回」「当面」などを含む。工程が終わったのに残っていないか（気象の「暫定」などドメインの言葉にも当たる）',skill_overlap:'説明文が似ていて、間違った場面で読まれやすい',unreferenced:'CLAUDE.md など自動で読まれる文書からたどれない。会話で渡さない限り効かない'};
 async function loadRules(){RV=await api('/api/rules');rulesView()}
 const ritem=id=>RV.items.find(i=>i.id===id),rdoc=id=>RV.docs.find(d=>d.id===id);
 const ghLink=(d,line)=>{const s=RV.sources.find(x=>x.repo===d.repo);return`https://github.com/${d.repo}/blob/${s?s.branch:'main'}/${d.path}${line?'#L'+line:''}`};
@@ -191,7 +191,7 @@ function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">�
  <ul class="items">${fl.slice(0,60).map(f=>{const A=f.kind==='skill_overlap'||f.kind==='unreferenced'?null:ritem(f.a),B=f.b&&f.kind!=='skill_overlap'?ritem(f.b):null;
   let body='';if(f.kind==='unreferenced'){const d=rdoc(f.a);body=`<b>${esc(d.path)}</b>（決まり ${RV.items.filter(i=>i.doc===d.id).length}）<small>${f.detail.from&&f.detail.from.length?'参照しているのは '+f.detail.from.map(esc).join('、')+'（どちらも自動では読まれない）':'どの文書からも参照されていない'}</small>`}
   else if(f.kind==='skill_overlap'){const a=rdoc(f.a),b=rdoc(f.b);body=`<b>${esc(a.title||a.path)}</b> と <b>${esc(b.title||b.path)}</b><small>説明文の近さ ${(+f.score).toFixed(2)}</small>`}
-  else body=`${A?ruleCard(A):''}${B?`<p class="sub" style="margin:4px 0">↕ 近さ ${(+f.score).toFixed(2)}</p>${ruleCard(B)}`:''}${f.kind==='temporary'?`<small>当たった言葉：「${esc(f.detail.word)}」</small>`:''}`;
+  else body=`${A?ruleCard(A):''}${B?`<p class="sub" style="margin:4px 0">↕ 近さ ${(+f.score).toFixed(2)}</p>${ruleCard(B)}`:''}${f.kind==='temporary'?`<small>当たった言葉：「${esc(f.detail.word)}」</small>`:''}${f.kind==='definition'?`<small>同じ言葉：${f.detail.terms.map(esc).join('、')}</small>`:''}`;
   return`<li><span class="badge r">${FK[f.kind]}</span>${body}<div class="row"><input data-why="${esc(f.key)}" placeholder="理由（任意）" style="flex:1 1 160px"><button class="btn s" data-dismiss="${esc(f.key)}">問題ではない</button></div></li>`}).join('')||'<li class="sub">ありません</li>'}</ul>${fl.length>60?`<p class="sub">ほか ${fl.length-60}件</p>`:''}`}
 async function pickFiles(repo){const box=$('#rf-'+repo.replace(/[^\w]/g,'_'));box.innerHTML='<p class="sub">一覧を読んでいます…</p>';const r=await api('/api/rules/files?repo='+encodeURIComponent(repo));
  box.innerHTML=`<p class="sub">決まりとして読むファイルを選ぶ（${r.files.length}件の .md）</p><div style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin-top:6px">${r.files.map(f=>`<label style="display:flex;gap:8px;align-items:center;min-height:36px;font-size:14px"><input type="checkbox" data-rpick="${esc(f.path)}" ${f.picked?'checked':''} style="width:auto"> ${esc(f.path)} <span class="badge">${APPLIES[f.applies]}</span></label>`).join('')}</div><div class="row"><button class="btn s p" data-rsave="${esc(repo)}">選んだものを保存</button></div>`}
