@@ -49,7 +49,7 @@ function draw() {
   ${x.counts.total && !x.counts.reported ? '<p class="sub" style="margin-top:8px">まだどの作業にも申告がありません。「範囲」→「Claude に届ける」で CLAUDE.md を書き出すと、次の作業から Claude が PR に「確かめた決まり」などを書きます。</p>' : ''}
   <div class="ac-chips" role="group" aria-label="絞る">${['すべて', ...(x.counts.warn ? ['気になる所'] : []), ...scopes].map(f => `<button class="ac-chip" data-acf="${esc(f)}" aria-pressed="${s.filter === f}">${esc(f)}</button>`).join('')}</div>
   ${list.map(i => { const o = s.open.has(i.number), rep = i.report;
-    return `<div class="ac-card"><button class="ac-head" data-aco="${i.number}" aria-expanded="${o}"><div class="ac-meta">#${i.number}・${esc(i.merged_at.slice(5, 16).replace('T', ' '))}</div><div class="ac-title">${esc(i.title)}</div>${i.scopes.map(t => `<span class="ac-tag">${esc(t)}</span>`).join('')}<div>${st0(i)}</div></button>
+    return `<div class="ac-card"><button class="ac-head" data-aco="${i.number}" aria-expanded="${o}"><div class="ac-meta">#${i.number}・${esc(when(i.merged_at))}</div><div class="ac-title">${esc(i.title)}</div>${i.scopes.map(t => `<span class="ac-tag">${esc(t)}</span>`).join('')}<div>${st0(i)}</div></button>
     ${o ? `<div class="ac-body">
       <h4>変えたファイル（${i.files.length}）</h4><ul>${i.files.slice(0, 20).map(f => `<li><code>${esc(f)}</code></li>`).join('')}${i.files.length > 20 ? `<li>ほか ${i.files.length - 20}</li>` : ''}</ul>
       <h4>関係する決まり（範囲から）と、確かめたか</h4>${i.expected.map(e => `<div class="ac-rule"><i>${!rep ? '・' : e.confirmed ? '✓' : e.skill ? '－' : '？'}</i><span>${esc(e.title || e.path)} <span class="ac-meta">${esc(e.path)}・「${esc(e.from)}」から${rep && !e.confirmed && !e.skill ? '・確かめた申告なし' : ''}${e.skill ? '・スキル（場面に合えば読み込まれる）' : ''}</span></span></div>`).join('') || '<p class="sub">範囲が分からないので出せません</p>'}
@@ -68,5 +68,6 @@ document.addEventListener('click', async e => {
   if (D.aco) { const n = +D.aco; s.open.has(n) ? s.open.delete(n) : s.open.add(n); draw(); return; }
   if (D.acref) { s.err = null; await refresh(REPO); }
 });
-window.Activity = { render };
+const when = t => { const d = new Date(t); if (isNaN(d)) return t; const p = n => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  window.Activity = { render };
 })();
