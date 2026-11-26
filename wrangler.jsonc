@@ -5,6 +5,8 @@
   "compatibility_date": "2025-11-01",
   "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/mcp/*"] },
   "ai": { "binding": "AI" },
+  // 画面（Cloudflare）で足した変数を、デプロイで消さない
+  "keep_vars": true,
   "d1_databases": [
     {
       "binding": "DB",
@@ -12,17 +14,10 @@
       "database_id": "bcec0d34-633d-44c4-8e3c-bb9efb96ce1c",
       "migrations_dir": "migrations"
     }
-  ],
-  // 1日1回（日本時間 6:10）に取り込みと提案の計算を行う
-  "triggers": { "crons": ["10 21 * * *"] },
-  "vars": {
-    "LINEAR_TEAM_KEY": "WAT",
-    "GITHUB_REPO": "Watanabe-Masao/weather-note-cf",
-    // true にすると、承認した判断を Linear に書き戻す（初期値は書き戻さない）
-    "WRITE_BACK": "false"
-  }
+  ]
   // 秘密の値は wrangler secret put で設定する：
-  //   LINEAR_API_KEY  … Linear の個人用 API キー
-  //   GITHUB_TOKEN    … 読み取りだけの細かい権限のトークン（公開リポジトリなら省略可）
-  //   ADMIN_TOKEN     … 画面から承認・取り込みをするときの合言葉
+  //   GITHUB_TOKEN        … 読み取りだけの細かい権限のトークン（公開リポジトリなら省略可）
+  //   GITHUB_WRITE_TOKEN  … 書き出し用（Contents と Pull requests の書き込み。PR を出すだけで、マージは人）
+  //   MCP_TOKEN           … Claude のコネクタの合言葉
+  //   ADMIN_TOKEN         … 画面から使うときの合言葉
 }
