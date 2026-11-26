@@ -128,3 +128,26 @@ test('入口が無いときは「入口が無い」1件にまとめ、入口の�
   } finally { globalThis.fetch = real; }
 });
 
+
+test('とても近くても片方だけが否定なら、重複ではなく食い違いの候補（#46）', async () => {
+  const files: Record<string, string> = {
+    'CLAUDE.md': '# 全体\n- 決まりは docs/a.md と docs/b.md を読む\n',
+    'docs/a.md': '# 表\n- 表の列は画面の幅に合わせて六つまでにし、横に送る作りを使う\n',
+    'docs/b.md': '# 表\n- 表の列は画面の幅に合わせて六つまでにし、横に送る作りを使わない\n',
+  };
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (u: string | URL) => {
+    const url = new URL(String(u));
+    if (url.pathname.includes('/git/trees/')) return Response.json({ truncated: false, tree: Object.keys(files).map(p => ({ path: p, type: 'blob', sha: 'x' })) });
+    const m = url.pathname.match(/\/contents\/(.+)$/);
+    if (m) return new Response(files[decodeURIComponent(m[1])]);
+    return new Response('nf', { status: 404 });
+  }) as typeof fetch;
+  try {
+    const env = fakeEnv();
+    await saveSource(env, 'o/r', Object.keys(files));
+    await syncRules(env, 'o/r');
+    const pair = (await rulesView(env)).findings.filter(x => x.b).map(x => x.kind); // 2つの決まりの組の問題
+    assert.deepEqual(pair, ['conflict']);
+  } finally { globalThis.fetch = real; }
+});
