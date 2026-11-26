@@ -6,17 +6,18 @@ import { LIST, PLAIN_APPLIES } from './diagnosis.ts';
 import { embedMany, loadVectors } from './embed.ts';
 import { dot } from './vec.ts';
 import { safeEqual } from './util.ts';
+import { mapAction } from './mcpmap.ts';
 
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 const INSTRUCTIONS = `（道具は idea_flow ひとつを使う。action="help" でできることを確かめる。ほかの道具は古い会話のために残しているもの）
-idea-flow は、開発の地図（機能ごとの作業・Issue の経過）と、決まりの文書の一覧・気になる所を見せる道具です。読むだけで、リポジトリにもアプリのデータにも書き込みません。
-- 決めるのは人です。見つかった問題は、事実（どの文書の何行目か、どう読まれるか）と、あなたの見立て（なぜ問題か、直し方の案、直したときの副作用）を分けて伝えてください。
-- 人に伝えるときは、まず結論から、ふだんの言葉で。件数や一覧は聞かれたら出す。道具の内側の言葉（finding の種類名など）は使わない。
-- 届き方の意味：自動で届く（CLAUDE.md・AGENTS.md）／役割として届く（ROLE.md）／場面に合えば届く（スキル。説明文で呼ばれる）／渡さないと届かない（それ以外の文書）。
-- 外から入れた決まり（ライセンスつきのスキルなど、書き換えないもの）は診断から外してある。
-- 問題の種類（findings の kind）：no_entry 入口が無い / unreferenced 入口からたどれない / duplicate 同じことが2か所 / definition 同じ言葉を2か所で説明 / conflict 食い違いかもしれない / temporary 終わったかもしれない / skill_overlap 似た場面で呼ばれるスキル / dead_ref もう無いファイルを指している / skill_unused 使っていない技術向けのスキル / orphan どこからも案内されていない文書。
-- dead_ref・skill_unused・orphan は「機能していない・意味がなさそう」の候補です。消す・直すを決めるのは人です。`;
+idea-flow は開発の地図です。機能ごとの作業（マージした PR）・Issue の経過とつながり・決まりの文書を、GitHub から読んで見せます。読むだけで、リポジトリにもアプリのデータにも書き込みません。決めるのは人です。
+- 作業を始める前に読む：action="map"（全体）→ 作業する機能の action="feature" → 関係する Issue の action="issue"（つながりと根拠）。どの機能・どの Issue の作業かを決めてから進める。分からなければ、作業の前に人に聞く。
+- つながりの種類：これで閉じた／番号で参照（PR の題・説明か Issue の本文に「#番号」）／引き継ぎ元・引き継ぎ先（「#299 P2」「#142 の続き」）／推測（候補）。推測は同じ機能のファイルを変えた PR を並べただけで、確定ではない。確定のように話さない。
+- 状態：直近7日に作業なし＝止まっている、直近4日に3件以上＝作っている、それ以外＝落ち着いた。「古くなっている候補」は、つながる機能がすべて止まっていて7日以上動いていない開いた Issue。閉じるかを決めるのは人。
+- 人に伝えるときは、まず結論から、ふだんの言葉で。件数や一覧は聞かれたら出す。
+- 決まりの文書：action="overview"（診断書と文書の一覧）・findings・read_doc・search。届き方：自動で届く（CLAUDE.md・AGENTS.md）／役割として届く（ROLE.md）／場面に合えば届く（スキル）／渡さないと届かない（それ以外）。
+- 問題の種類（findings の kind）：no_entry 入口が無い / unreferenced 入口からたどれない / duplicate 同じことが2か所 / definition 同じ言葉を2か所で説明 / conflict 食い違いかもしれない / temporary 終わったかもしれない / skill_overlap 似た場面で呼ばれるスキル / dead_ref もう無いファイルを指している / skill_unused 使っていない技術向けのスキル / orphan どこからも案内されていない文書。消す・直すを決めるのは人。`;
 
 const KIND_JA: Record<string, string> = { no_entry: '入口が無い', unreferenced: '入口からたどれない', duplicate: '同じことが2か所', definition: '同じ言葉を2か所で説明', conflict: '食い違いかもしれない', temporary: '終わったかもしれない', skill_overlap: '似た場面で呼ばれるスキル', dead_ref: 'もう無いファイルを指している', skill_unused: '使っていない技術向けのスキル', orphan: 'どこからも案内されていない' };
 const APPLIES_JA = PLAIN_APPLIES;
@@ -61,6 +62,11 @@ const TOOLS = [
  */
 const ACTIONS: Record<string, { tool: string; summary: string }> = {
   help: { tool: '', summary: 'できること（action）の一覧と、それぞれの args' },
+  map: { tool: 'map', summary: '地図の全体：機能ごとの状態・開いている Issue・古くなっている候補・どの機能にも当たらない作業。作業の前に最初に読む。args: repo?, span?（日数）, refresh?' },
+  feature: { tool: 'map', summary: '機能の中身：使うデータ・最近の作業（申告つき）・開いている Issue。args: id か name, repo?' },
+  issue: { tool: 'map', summary: 'Issue の周辺：つながる PR・Issue と、その種類と根拠（どこに書いてあったか）。args: n, repo?' },
+  issues: { tool: 'map', summary: 'Issue の一覧。args: state?（open／closed／stale／all）, repo?' },
+  sync: { tool: 'map', summary: 'GitHub から PR と Issue を読み直す（ふだんは30分ごとに自動）。args: repo?' },
   overview: { tool: 'rules_overview', summary: '診断書（結論・なぜ困るか・次の一手）。args: repo?, docs?' },
   findings: { tool: 'list_rule_findings', summary: '問題の一覧。args: repo?, kind?, limit?, offset?' },
   read_doc: { tool: 'read_rule_doc', summary: '文書を見出しごとに行番号つきで。args: repo, path, heading?, offset?, limit?' },
@@ -68,10 +74,10 @@ const ACTIONS: Record<string, { tool: string; summary: string }> = {
 };
 const ENTRY = {
   name: 'idea_flow',
-  description: 'idea-flow のひとつの入口。action と args を渡す。まず action="help" で、いまできることを確かめる。主な action：overview（文書の診断書）・findings・read_doc・search。',
+  description: 'idea-flow のひとつの入口。action と args を渡す。作業の前に action="map"（地図の全体）→ feature（機能）→ issue（Issue の周辺と根拠）を読む。決まりの文書は overview・findings・read_doc・search。action="help" でできることを確かめる。',
   inputSchema: {
     type: 'object',
-    properties: { action: { type: 'string', description: 'help / overview / findings / read_doc / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
+    properties: { action: { type: 'string', description: 'help / map / feature / issue / issues / sync / overview / findings / read_doc / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
     required: ['action'], additionalProperties: false,
   },
 };
@@ -173,6 +179,7 @@ async function callEntry(env: Env, action: string, args: Record<string, unknown>
     const head = action === 'help' ? '' : `「${action}」という action はありません。\n\n`;
     return text(head + 'idea_flow の action（args は JSON のオブジェクトで渡す）\n' + Object.entries(ACTIONS).filter(([k]) => k !== 'help').map(([k, v]) => `- ${k}：${v.summary}`).join('\n'), action !== 'help');
   }
+  if (ACTIONS[action].tool === 'map') return text(await mapAction(env, action, args));
   return callTool(env, ACTIONS[action].tool, args);
 }
 
@@ -181,7 +188,7 @@ async function handle(env: Env, m: Rpc) {
   switch (m.method) {
     case 'initialize': {
       const want = String(m.params?.protocolVersion ?? '');
-      return ok(id, { protocolVersion: VERSIONS.includes(want) ? want : VERSIONS[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'idea-flow', version: '0.3.0' }, instructions: INSTRUCTIONS });
+      return ok(id, { protocolVersion: VERSIONS.includes(want) ? want : VERSIONS[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'idea-flow', version: '0.4.0' }, instructions: INSTRUCTIONS });
     }
     case 'ping': return ok(id, {});
     case 'tools/list': return ok(id, { tools: [ENTRY, ...TOOLS] });

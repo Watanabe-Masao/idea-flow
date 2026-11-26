@@ -32,6 +32,8 @@ css.textContent = `
 .wm-track{position:relative;height:22px}.wm-track .ax{position:absolute;top:0;bottom:0;width:1px;background:var(--line)}
 .wm-track .bar{position:absolute;top:7px;height:8px;border-radius:4px;background:var(--mute);min-width:4px}
 .wm-track .bar.open{background:transparent;border:2px solid #2fae69;top:6px}.wm-track .bar.stale{border-color:var(--warn)}.wm-track .bar.done{background:#2fae69}
+.wm-track .pr.k{border-style:dashed;opacity:.6;transform:scale(.8)}.wm-track .pr b{position:absolute;top:-13px;left:50%;transform:translateX(-50%);font-size:9px;font-weight:600;color:var(--mute)}
+.wm-link{border-top:1px dashed var(--line);padding:6px 0;font-size:13.5px}.wm-link .ev{font-size:12px;color:var(--mute);margin-top:1px}.wm-kind{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--soft);margin-right:4px;white-space:nowrap}.wm-kind.k{border:1px dashed var(--mute);background:none}
 .wm-track .pr{position:absolute;top:4px;width:12px;height:12px;margin-left:-6px;border-radius:50%;border:2px solid var(--ink);background:var(--panel)}.wm-track .pr.c{background:var(--ink)}
 .wm-axis{display:grid;grid-template-columns:9.5em minmax(0,1fr);gap:8px;font-size:11px;color:var(--mute);position:sticky;top:0;background:var(--panel);z-index:2;padding:6px 4px}.wm-axis div{position:relative;height:14px}.wm-axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
 .wm h3{font-size:16px;color:var(--ink);font-weight:600;margin:22px 0 2px}
@@ -39,7 +41,7 @@ css.textContent = `
 document.head.appendChild(css);
 const ST = ['作っている', '落ち着いた', '止まっている'];
 const S = {}; let EL = null, REPO = '';
-const st = r => S[r] || (S[r] = { data: null, span: 21, view: 'feat', ifilt: 'all', isel: null, filt: -1, sel: null, node: null, busy: false, note: '', synced: false });
+const st = r => S[r] || (S[r] = { data: null, span: 21, view: 'feat', ifilt: 'all', isel: null, ifocus: null, filt: -1, sel: null, node: null, busy: false, note: '', synced: false });
 const lv = n => n === 0 ? 'var(--line)' : n <= 1 ? 'var(--h1)' : n <= 3 ? 'var(--h2)' : 'var(--h3)';
 const md = d => d ? d.slice(5).replace('-', '/') : '';
 const GH = r => `https://github.com/${r}`;
@@ -100,27 +102,34 @@ function issueView(d, s) {
   const ticks = []; for (let k = today; k >= t0; k -= 7) ticks.push(k);
   const axis = `<div class="wm-axis"><i></i><div>${ticks.map(k => `<span style="left:${(k - t0) / Math.max(1, N) * 100}%">${md(dstr(k))}</span>`).join('')}</div></div>`;
   const F = { all: () => true, open: i => i.open, closed: i => !i.open, stale: i => i.stale };
-  const list = all.filter(F[s.ifilt]).sort((a, b) => a.created.localeCompare(b.created) || a.number - b.number);
+  const near = s.ifocus ? new Set([s.ifocus, ...(all.find(i => i.number === s.ifocus)?.links || []).filter(l => l.type === 'issue').map(l => l.n)]) : null;
+  const list = all.filter(i => near ? near.has(i.number) : F[s.ifilt](i)).sort((a, b) => a.created.localeCompare(b.created) || a.number - b.number);
   const fname = id => d.features.find(f => f.id === id)?.name || id;
   const rows = list.map(i => {
     const end = i.closed || d.today, on = s.isel === i.number;
-    const prs = i.prs.map(p => `<i class="pr${p.closes ? ' c' : ''}" style="left:${x(p.day)}" title="#${p.n} ${esc(md(p.day))}"></i>`).join('');
+    const pl = i.links.filter(l => l.type === 'pr'), byDay = new Map();
+    for (const l of pl) byDay.set(l.day, [...(byDay.get(l.day) || []), l]);
+    const prs = [...byDay].map(([day, ls]) => { const c = ls.some(l => l.kind === 'closes'), k = ls.every(l => l.kind === 'candidate');
+      return `<i class="pr${c ? ' c' : ''}${k ? ' k' : ''}" style="left:${x(day)}" title="${esc(md(day))} ${ls.map(l => '#' + l.n).join(' ')}">${ls.length > 1 ? `<b>${ls.length}</b>` : ''}</i>`; }).join('');
+    const KIND = { parent: '引き継ぎ元', child: '引き継ぎ先', closes: 'これで閉じた', ref: '番号で参照', candidate: '推測（候補）' };
     const det = on ? `<div class="wm-det"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">#${i.number} ${esc(i.title)}</a>
       <div style="margin-top:4px">立てた ${md(i.created)}${i.closed ? `・閉じた ${md(i.closed)}（${dnum(i.closed) - dnum(i.created)}日）` : `・開いたまま ${today - dnum(i.created)}日・最後に動いた ${md(i.updated)}`}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>
-      <div>機能：${esc(i.features.map(fname).join('、') || (i.nodes.length ? 'なし（画面のないデータ）' : 'どの機能にも当たらない'))}</div>
-      <h4>つながるマージ（${i.prs.length}）</h4>${i.prs.length ? `<ul>${i.prs.map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.n}</a> ${md(p.day)}${p.closes ? '（これで閉じる）' : ''} ${esc(p.t)}</li>`).join('')}</ul>` : '<div>PR の題・説明から、この Issue を指すものは見つかりません</div>'}</div>` : '';
+      <div>機能：${esc(i.features.map(fname).join('、') || (i.nodes.length ? 'なし（画面のないデータ）' : 'どの機能にも当たらない'))}${i.how ? `（${esc(i.how)}）` : ''}</div>
+      <div class="row" style="margin-top:6px"><button class="btn" data-ifocus="${s.ifocus === i.number ? '' : i.number}" style="min-height:36px">${s.ifocus === i.number ? '中心をやめる' : 'この Issue を中心に'}</button></div>
+      <h4>つながり（${i.links.length}）</h4>${i.links.length ? i.links.map(l => `<div class="wm-link"><span class="wm-kind${l.kind === 'candidate' ? ' k' : ''}">${KIND[l.kind]}</span>${l.type === 'issue' ? `<a href="#" data-goto="${l.n}">Issue #${l.n}</a>${l.open ? '（開いている）' : ''}` : `<a href="${esc(l.url)}" target="_blank" rel="noopener">PR #${l.n}</a> ${md(l.day)}`} ${esc(l.title)}${l.evidence.map(e => `<div class="ev">根拠：${esc(e)}</div>`).join('')}</div>`).join('') : '<div>番号でのつながりも、同じ機能の作業も見つかりません</div>'}</div>` : '';
     return `<div class="wm-tl${on ? ' on' : ''}" data-i="${i.number}" role="button" tabindex="0" aria-expanded="${on}"><div class="nm"><b>#${i.number}</b> ${esc(i.title)}</div>
       <div class="wm-track">${ticks.map(k => `<i class="ax" style="left:${(k - t0) / Math.max(1, N) * 100}%"></i>`).join('')}<i class="bar${i.open ? ' open' : ' done'}${i.stale ? ' stale' : ''}" style="left:${x(i.created)};width:calc(${x(end)} - ${x(i.created)})"></i>${prs}</div></div>${det}`;
   }).join('');
-  return `<p class="sub" style="margin-top:8px">Issue を立てた日から閉じた日（開いているものは今日）までを線で、つながるマージ（PR）を点で。PR の題・説明が「#番号」でその Issue を指していればつながりとみなします。黒い点はその PR で閉じたもの。</p>
+  return `<p class="sub" style="margin-top:8px">Issue を立てた日から閉じた日（開いているものは今日）までを線で、つながるマージ（PR）を点で。押すと、つながりの種類と根拠（どこに書いてあったか）が出ます。番号で書かれていないものは「推測（候補）」として分けて出します。</p>
   <div class="wm-sum"><div><b>${all.length}</b><span>立てた Issue</span></div><div><b>${closed.length}</b><span>閉じた（かかった日数の中央 ${med ?? '—'}日）</span></div>
   <div class="hot"><b>${all.length - closed.length}</b><span>開いている</span></div><div><b style="color:var(--warn)">${all.filter(i => i.stale).length}</b><span>古くなっている候補</span></div></div>
   <h3>開いている Issue の数の移り変わり</h3><p class="sub">面は毎日の終わりに開いていた数。緑の棒は立てた数、灰の棒は閉じた数。</p>
   <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;width:100%;height:120px;margin-top:6px" role="img" aria-label="開いている Issue の数の移り変わり"><path d="${area}" fill="#2fae69" fill-opacity=".18" stroke="#2fae69" stroke-width=".6" vector-effect="non-scaling-stroke"/>${bars(opened, '#2fae69', 0)}${bars(closedN, 'var(--mute)', 1.4)}</svg>
   <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--mute)"><span>${md(dstr(t0))}</span><span>いちばん多い日 ${Math.max(...openAt)}件・今 ${openAt.at(-1)}件</span><span>${md(d.today)}</span></div>
   <h3>Issue ごとの経過</h3>
+  ${s.ifocus ? `<div class="row" style="margin-top:8px"><b>Issue #${s.ifocus} を中心に表示中</b><button class="btn" data-ifocus="" style="min-height:36px">すべてに戻す</button></div>` : ''}
   <div class="wm-chips">${[['all', 'すべて'], ['open', '開いている'], ['closed', '閉じた'], ['stale', '古くなっている候補']].map(([v, l]) => `<button class="wm-chip" data-ifilt="${v}" aria-pressed="${s.ifilt === v}">${l}</button>`).join('')}</div>
-  <div class="wm-legend"><span><span class="wm-sw" style="background:#2fae69"></span>閉じた</span><span><span class="wm-sw" style="border:2px solid #2fae69"></span>開いている</span><span><span class="wm-sw" style="border:2px solid var(--warn)"></span>古くなっている候補</span><span>● 閉じた PR　○ 指した PR</span></div>
+  <div class="wm-legend"><span><span class="wm-sw" style="background:#2fae69"></span>閉じた</span><span><span class="wm-sw" style="border:2px solid #2fae69"></span>開いている</span><span><span class="wm-sw" style="border:2px solid var(--warn)"></span>古くなっている候補</span><span>● 閉じた PR　○ 番号で参照　◌ 推測（候補）　数字＝同じ日のマージ</span></div>
   <div class="wm-board">${axis}${rows || '<p class="sub">該当なし</p>'}</div>`;
 }
 
@@ -189,6 +198,8 @@ function bind(el) {
     const sp = t.closest('[data-span]'); if (sp) { s.span = +sp.dataset.span; hideDay(); load(REPO).then(draw).catch(err => { s.note = err.message; draw(); }); return; }
     const vw = t.closest('[data-view]'); if (vw) { s.view = vw.dataset.view; hideDay(); draw(); return; }
     const ifl = t.closest('[data-ifilt]'); if (ifl) { s.ifilt = ifl.dataset.ifilt; draw(); return; }
+    const fo = t.closest('[data-ifocus]'); if (fo) { s.ifocus = fo.dataset.ifocus ? +fo.dataset.ifocus : null; draw(); return; }
+    const go = t.closest('[data-goto]'); if (go) { e.preventDefault(); s.isel = +go.dataset.goto; if (s.ifocus && !(s.data.issues.find(i => i.number === s.ifocus)?.links || []).some(l => l.n === s.isel) && s.ifocus !== s.isel) s.ifocus = null; s.ifilt = 'all'; draw(); EL.querySelector(`.wm-tl[data-i="${s.isel}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     const tl = t.closest('.wm-tl'); if (tl && !t.closest('a')) { s.isel = s.isel === +tl.dataset.i ? null : +tl.dataset.i; draw(); return; }
     const fl = t.closest('[data-filt]'); if (fl) { s.filt = +fl.dataset.filt; draw(); return; }
     if (t.closest('.wm-scr') || t.closest('a')) return;
