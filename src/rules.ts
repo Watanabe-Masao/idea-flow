@@ -109,7 +109,7 @@ type Item = { id: string; doc: string; heading: string; text: string; kind: stri
 type Doc = { id: string; repo: string; path: string; kind: string; applies: string; scope: string; title: string | null; description: string | null; refs: string; external: number; external_by: string | null };
 
 /** 問題の探し方の版。探し方を変えたら上げる（古い結果のままなら、画面で取り込み直しを促す） */
-export const ANALYZE_VERSION = '4';
+export const ANALYZE_VERSION = '5'; // 5：重複にする前に否定を確かめる（#46）
 
 /** 問題を探し直す（全部のリポジトリをまとめて。別のリポジトリどうしの重複も見える） */
 export async function analyze(env: Env) {
@@ -136,6 +136,8 @@ export async function analyze(env: Env) {
   pairs.sort((p, q) => q.s - p.s);
   let nd = 0, nc = 0, nf = 0;
   for (const p of pairs) {
+    // とても近くても、片方だけが否定（〜しない・使わない など）なら、同じことではなく逆のことを言っている → 食い違いの候補へ
+    if (p.s >= dupT && p.a.neg !== p.b.neg) { if (nc < 80) { add('conflict', p.a.i.id, p.b.i.id, p.s, { why: 'neg' }); nc++; } continue; }
     if (p.s >= dupT) { if (nd < 80) { add('duplicate', p.a.i.id, p.b.i.id, p.s, {}); nd++; } continue; }
     // 同じ言葉を別の文書で説明している → 定義が分かれている（食い違いより先に見る）
     const shared = [...p.a.terms].filter(t => p.b.terms.has(t));
