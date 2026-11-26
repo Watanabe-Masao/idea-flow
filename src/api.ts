@@ -5,7 +5,7 @@ import { syncGithub } from './github.ts';
 import { refreshEmbeddings, embedMany, MODEL } from './embed.ts';
 import { errorJson, json, jstDay, newId, nowIso, safeEqual } from './util.ts';
 import { analyze, dismiss, listFiles, rulesView, saveSource, setExternal, syncRules, xray } from './rules.ts';
-import { contractText, decide as decideChange, preview as previewChange, propose, requests as changeRequests, scopeTree } from './scopes.ts';
+import { contractText, decide as decideChange, draftTree, preview as previewChange, propose, requests as changeRequests, scopeTree, suggestTree } from './scopes.ts';
 
 const isAdmin = (req: Request, env: Env) => {
   const h = req.headers.get('authorization') ?? '';
@@ -131,7 +131,8 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       if (p === '/api/rules/sync') return json(await syncRules(env, String(body.repo ?? '')));
       if (p === '/api/rules/analyze') return json(await analyze(env));
       if (p === '/api/scopes/propose') return json(await propose(env, String(body.repo ?? ''), 'human', String(body.title ?? ''), String(body.reason ?? ''), body.ops as never));
-      if (p === '/api/scopes/preview') return json(await previewChange(env, String(body.repo ?? ''), body.ops as never));
+      if (p === '/api/scopes/preview') { const r = String(body.repo ?? ''), ops = (Array.isArray(body.ops) ? body.ops : []) as never; return json({ tree: await draftTree(env, r, ops), preview: (ops as unknown[]).length ? await previewChange(env, r, ops) : [] }); }
+      if (p === '/api/scopes/suggest') return json(await suggestTree(env, String(body.repo ?? '')));
       if (p === '/api/scopes/decide') return json(await decideChange(env, String(body.id ?? ''), body.decision === 'accept' ? 'accept' : 'reject', body.note ? String(body.note).slice(0, 500) : null));
       if (p === '/api/rules/external') return json(await setExternal(env, String(body.repo ?? ''), String(body.path ?? ''), !!body.external));
       if (p === '/api/rules/dismiss') return json(await dismiss(env, String(body.key ?? ''), body.why ? String(body.why).slice(0, 200) : null));

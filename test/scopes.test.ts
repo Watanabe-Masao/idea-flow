@@ -71,3 +71,38 @@ test('レントゲンに範囲を渡すと、範囲の文書は届き、例外�
     assert.equal(y.missing[0]?.path, 'docs/engineering.md', '計算の決まりは画面の範囲には届かない');
   } finally { globalThis.fetch = real; }
 });
+
+import { suggestTree, draftTree } from '../src/scopes.ts';
+test('木の案：まとめ役は全体に、参照のつながりで範囲、スキルは名前が出てくる範囲へ。下書きの木', async () => {
+  const files: Record<string, string> = {
+    'docs/hub.md': '# 運用\n- 画面は docs/screen.md、計算は docs/calc.md\n',
+    'docs/screen.md': '# 画面の決まり\n- 動きは gsap で付ける\n- 手引きは docs/hub.md\n',
+    'docs/calc.md': '# 計算の決まり\n- 地図は docs/calc-map.md\n- 運用は docs/hub.md\n' + Array.from({ length: 12 }, (_, i) => `- 決まり${i}の内容をここに書く\n`).join(''),
+    'docs/calc-map.md': '# 計算の地図\n- 依存の向き\n',
+    '.claude/skills/LICENSE': 'MIT',
+    '.claude/skills/README.md': '# GSAP の決まり\n- 版を固定\n',
+    '.claude/skills/gsap-core/SKILL.md': '---\nname: gsap-core\ndescription: GSAP\n---\n# x\n- y\n',
+  };
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (u: string | URL) => {
+    const url = new URL(String(u));
+    if (url.pathname.includes('/git/trees/')) return Response.json({ truncated: false, tree: Object.keys(files).map(p => ({ path: p, type: 'blob', sha: 'x' })) });
+    const m = url.pathname.match(/\/contents\/(.+)$/);
+    return m ? new Response(files[decodeURIComponent(m[1])]) : new Response('nf', { status: 404 });
+  }) as typeof fetch;
+  try {
+    const env = fakeEnv();
+    await saveSource(env, 'o/r', Object.keys(files).filter(p => p.endsWith('.md')));
+    await syncRules(env, 'o/r');
+    const { ops, hub } = await suggestTree(env, 'o/r');
+    assert.equal(hub, 'docs/hub.md');
+    const t = await draftTree(env, 'o/r', ops);
+    const calc = t.find(s => s.docs.includes('docs/calc.md'))!;
+    assert.deepEqual(calc.docs.sort(), ['docs/calc-map.md', 'docs/calc.md']);
+    assert.equal(calc.name, '計算の決まり');
+    const screen = t.find(s => s.docs.includes('docs/screen.md'))!;
+    assert.ok(screen.docs.includes('.claude/skills/gsap-core/SKILL.md') && screen.docs.includes('.claude/skills/README.md'), 'スキルは名前が出てくる範囲へ');
+    assert.ok(!calc.docs.some(p => p.includes('gsap')));
+    assert.equal((await scopeTree(env, 'o/r')).length, 0, '下書きは保存しない');
+  } finally { globalThis.fetch = real; }
+});
