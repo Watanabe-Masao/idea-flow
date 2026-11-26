@@ -38,7 +38,7 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       if (p === '/api/rules/source') return json(await saveSource(env, String(body.repo ?? ''), Array.isArray(body.files) ? body.files as string[] : []));
       if (p === '/api/rules/sync') return json(await syncRules(env, String(body.repo ?? '')));
       if (p === '/api/rules/analyze') return json(await analyze(env));
-      if (p === '/api/map/sync') return json(await syncMap(env, String(body.repo ?? ''), Math.min(6, Math.max(1, Number(body.pages) || 4))));
+      if (p === '/api/map/sync') return json(await syncMap(env, String(body.repo ?? ''), { mode: body.mode === 'backfill' ? 'backfill' : 'update', pages: Math.min(6, Math.max(1, Number(body.pages) || 4)) }));
       if (p === '/api/rules/external') return json(await setExternal(env, String(body.repo ?? ''), String(body.path ?? ''), !!body.external));
       if (p === '/api/rules/dismiss') return json(await dismiss(env, String(body.key ?? ''), body.why ? String(body.why).slice(0, 200) : null));
     }

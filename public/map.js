@@ -54,11 +54,15 @@ const GH = r => `https://github.com/${r}`;
 
 async function load(r) { const s = st(r); s.data = await api(`/api/map?repo=${encodeURIComponent(r)}&span=${s.span}`); }
 async function sync(r) {
-  const s = st(r); if (s.busy) return; s.busy = true; s.note = 'GitHub から PR と Issue を読んでいます…'; draw();
+  const s = st(r); if (s.busy) return; s.busy = true; s.note = 'GitHub から最近の更新と Issue を読んでいます…'; draw();
   try {
-    let n = 0;
-    for (let k = 0; k < 8; k++) { const x = await api('/api/map/sync', { method: 'POST', body: JSON.stringify({ repo: r, pages: 4 }) }); n += x.prs; s.note = `PR を ${n} 件読みました…`; draw(); if (x.backfillDone) break; }
-    await load(r); s.note = '';
+    // 最近の更新（と Issue）を先に。追いつくまで続ける（3回まで）。そのあと、さかのぼりが残っていれば続ける
+    let up = 0, iss = 0, caught = false, done = false, back = 0, busy = false;
+    for (let k = 0; k < 3 && !caught; k++) { const x = await api('/api/map/sync', { method: 'POST', body: JSON.stringify({ repo: r, mode: 'update' }) }); if (x.busy) { busy = true; break; } up += x.updated; iss = x.issues; caught = x.caughtUp; done = x.backfillDone; }
+    for (let k = 0; k < 8 && !busy && !done; k++) { const x = await api('/api/map/sync', { method: 'POST', body: JSON.stringify({ repo: r, mode: 'backfill', pages: 4 }) }); if (x.busy) { busy = true; break; } back += x.backfilled; done = x.backfillDone; s.note = `さかのぼり ${back}件…`; draw(); }
+    await load(r);
+    s.note = busy ? 'ほかの読み込み（コネクタなど）の途中だったので、保存済みの地図を出しています。少し待ってから読み直してください。'
+      : `最近の更新 ${up}件${caught ? '' : '（続きあり）'}・Issue ${iss}件${back ? `・さかのぼり ${back}件` : ''}を確かめました。`;
   } catch (e) { s.note = '読めませんでした：' + e.message; }
   s.busy = false; s.synced = true; draw();
 }

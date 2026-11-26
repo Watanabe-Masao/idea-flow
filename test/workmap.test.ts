@@ -63,11 +63,13 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
     return new Response('nf', { status: 404 });
   }) as typeof fetch;
   try {
-    const a = await syncMap(env, 'o/r', 1);
-    assert.deepEqual(a, { prs: 4, backfillDone: false, issues: 3, issuesMore: false });
-    const b = await syncMap(env, 'o/r', 4);
+    const a = await syncMap(env, 'o/r', { mode: 'backfill', pages: 1 });
+    assert.deepEqual([a.backfilled, a.backfillDone], [4, false]);
+    const b = await syncMap(env, 'o/r', { mode: 'backfill', pages: 4 });
     assert.equal(b.backfillDone, true);
-    assert.equal(gql, 6); // 1回目：さかのぼり1＋新しい1＋Issue 1、2回目：さかのぼり1（残り2件）＋新しい1（前回より古いものに届いたので1ページ）＋Issue 1
+    const u = await syncMap(env, 'o/r', { mode: 'update' });
+    assert.deepEqual([u.updated, u.issues, u.caughtUp], [2, 3, true]);
+    assert.equal(gql, 4); // さかのぼり1・さかのぼり1（残り2件）・最近の更新1・Issue 1
   } finally { globalThis.fetch = real; }
 
   const v = await mapView(env, 'o/r', 21, '2026-11-27') as any;
@@ -160,4 +162,50 @@ test('申告は区切り線（---）で終わる・「関連：なし」は守�
   assert.deepEqual(parseReport('## 足りなかった決まり\n- なし\n\n---\n\n🤖 Generated')!.lack, []);
   const w = writingCheck(CAT, [{ number: 1, title: '満月の物語：x', url: 'u', merged_at: '2026-11-20T00:00:00Z', files: [], closes: [], body: '関連：なし' }], [], new Map());
   assert.equal(w.prLinked, 1);
+});
+
+test('同期：重なったら後の方は何もしない／ロックが切れたあとの古い処理は書けない／最近の更新は前回の境界に届くまで続きから', async () => {
+  const env = fakeEnv() as any; env.GITHUB_TOKEN = 't';
+  CATALOGS['o/r'] = CAT;
+  const N = 201, base = Date.parse('2026-11-27T00:00:00Z');
+  // 新しく動いた順の PR（201件。どれも前回の境界より新しい）。1ページ50件
+  const pr = (k: number, title = `作業${k}`) => ({ number: k, title, url: 'u' + k, mergedAt: '2026-11-20T00:00:00Z', updatedAt: new Date(base - k * 1000).toISOString(), body: '', files: { nodes: [] } });
+  let title = '新しい題', pause: (() => void) | null = null, hold = false;
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (_u: string | URL, init?: RequestInit) => {
+    const q = JSON.parse(String(init!.body)), v = q.variables;
+    if (q.query.includes('issues(')) return Response.json({ data: { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } });
+    const start = v.after ? Number(v.after) : 0;
+    const nodes = Array.from({ length: Math.min(50, N - start) }, (_, i) => pr(start + i + 1, title)); // 答えの中身は、問い合わせた時点の題
+    if (hold) await new Promise<void>(r => { pause = r; });
+    return Response.json({ data: { repository: { pullRequests: { pageInfo: { hasNextPage: start + 50 < N, endCursor: String(start + 50) }, nodes } } } });
+  }) as typeof fetch;
+  try {
+    // 前回の境界：いちばん古い（201番目）より前
+    await env.DB.prepare("INSERT INTO map_sync (repo, pr_done, prs_at) VALUES ('o/r', 1, '2026-11-26T00:00:00Z')").run();
+    const a = await syncMap(env, 'o/r', { mode: 'update' });
+    assert.deepEqual([a.updated, a.caughtUp], [200, false]);          // 4ページで止まる。境界にはまだ届かない
+    let row = await env.DB.prepare("SELECT prs_at, upd_cursor FROM map_sync WHERE repo = 'o/r'").first();
+    assert.deepEqual([row.prs_at, row.upd_cursor], ['2026-11-26T00:00:00Z', '200']); // 最終成功時刻は進めない
+    const b = await syncMap(env, 'o/r', { mode: 'update' });
+    assert.deepEqual([b.updated, b.caughtUp], [1, true]);             // 残りの1件を続きから拾う
+    row = await env.DB.prepare("SELECT prs_at, upd_cursor FROM map_sync WHERE repo = 'o/r'").first();
+    assert.equal(row.upd_cursor, null);
+    // 重なり：1つ目を GitHub の答えの途中で止め、その間に2つ目
+    title = '古い題'; hold = true;
+    const first = syncMap(env, 'o/r', { mode: 'update' });
+    await new Promise(r => setTimeout(r, 5));
+    hold = false;
+    const second = await syncMap(env, 'o/r', { mode: 'update' });
+    assert.equal(second.busy, true);
+    // 1つ目のロックを期限切れにし、別の処理（新しい題）が先に書き終える
+    await env.DB.prepare("UPDATE map_sync SET sync_until = '2000-01-01T00:00:00Z' WHERE repo = 'o/r'").run();
+    title = '新しい題';
+    const third = await syncMap(env, 'o/r', { mode: 'update' });
+    assert.equal(third.busy, false);
+    (pause as unknown as () => void)();                                // 遅れていた1つ目が、あとから書こうとする
+    await first;
+    const t1 = await env.DB.prepare("SELECT title FROM pr_activity WHERE repo = 'o/r' AND number = 1").first();
+    assert.equal(t1.title, '新しい題');                                 // 古い題に巻き戻らない
+  } finally { globalThis.fetch = real; delete CATALOGS['o/r']; }
 });
