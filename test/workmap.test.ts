@@ -98,6 +98,10 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
     assert.match(await mapAction(env, 'issue', { repo: 'o/r', n: '#7' }), /つながり（0）/);
     assert.match(await mapAction(env, 'feature', { repo: 'o/r', id: 'feel' }), /#8 βモデル 段階4.*［古くなっている候補］/);
     await assert.rejects(mapAction(env, 'issue', { repo: 'o/r', n: 99 }), /#99 は取り込まれていません/);
+    const rv = await mapAction(env, 'review', { repo: 'o/r' });
+    assert.match(rv, /1\. 古くなっている候補の Issue（1）/);
+    assert.match(rv, /2\. どの機能にも当たらない作業（1）[\s\S]*README\.md（1件：#6）/);
+    assert.match(rv, /6\. 貯めているのに画面で使っていないデータ（1）[\s\S]*警報/);
   } finally { globalThis.fetch = real2; }
   delete CATALOGS['o/r'];
 });

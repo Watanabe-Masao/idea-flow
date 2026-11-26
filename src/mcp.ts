@@ -66,6 +66,7 @@ const ACTIONS: Record<string, { tool: string; summary: string }> = {
   feature: { tool: 'map', summary: '機能の中身：使うデータ・最近の作業（申告つき）・開いている Issue。args: id か name, repo?' },
   issue: { tool: 'map', summary: 'Issue の周辺：つながる PR・Issue と、その種類と根拠（どこに書いてあったか）。args: n, repo?' },
   issues: { tool: 'map', summary: 'Issue の一覧。args: state?（open／closed／stale／all）, repo?' },
+  review: { tool: 'map', summary: '週1回の見直しの材料：古くなっている候補・当たらない作業・書き方の守り具合・足りなかった決まり・止まっている機能・画面のないデータ（決めるのは人）。args: repo?' },
   sync: { tool: 'map', summary: 'GitHub から PR と Issue を読み直す（ふだんは30分ごとに自動）。args: repo?' },
   overview: { tool: 'rules_overview', summary: '診断書（結論・なぜ困るか・次の一手）。args: repo?, docs?' },
   findings: { tool: 'list_rule_findings', summary: '問題の一覧。args: repo?, kind?, limit?, offset?' },
@@ -77,7 +78,7 @@ const ENTRY = {
   description: 'idea-flow のひとつの入口。action と args を渡す。作業の前に action="map"（地図の全体）→ feature（機能）→ issue（Issue の周辺と根拠）を読む。決まりの文書は overview・findings・read_doc・search。action="help" でできることを確かめる。',
   inputSchema: {
     type: 'object',
-    properties: { action: { type: 'string', description: 'help / map / feature / issue / issues / sync / overview / findings / read_doc / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
+    properties: { action: { type: 'string', description: 'help / map / feature / issue / issues / review / sync / overview / findings / read_doc / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
     required: ['action'], additionalProperties: false,
   },
 };

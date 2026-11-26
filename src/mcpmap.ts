@@ -91,6 +91,25 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
     L.push('', '推測（候補）は、同じ機能のファイルを変えた PR を並べただけで、確定ではありません。作業がこの Issue のものなら、PR に「#' + i.number + '」を書いてつながりを確かにしてください。');
     return L.join('\n');
   }
+  if (action === 'review') {
+    // 週1回の見直し：人が決めることだけを、決めやすい順に並べる（docs/operation.md）
+    const L = [`■ ${d.repo} の週の見直し（${md(d.today)}・直近${d.days.length}日）`, '決めるのは人です。それぞれ「案」を添えています。', ''];
+    const stale = d.issues.filter(i => i.stale);
+    L.push(`1. 古くなっている候補の Issue（${stale.length}）：閉じる／その機能の「残り」に寄せる／そのまま、を決める`, ...stale.map(i => '   - ' + issueLine(d, i)));
+    const dirs = new Map<string, number[]>();
+    for (const p of d.unmatched) for (const f of new Set(p.files.map(x => x.split('/').slice(0, 2).join('/')))) dirs.set(f, [...(dirs.get(f) ?? []), p.n]);
+    L.push('', `2. どの機能にも当たらない作業（${d.unmatched.length}）：カタログに機能を足すか、今のどれかの機能に含めるかを決める`,
+      ...[...dirs].sort((a, b) => b[1].length - a[1].length).slice(0, 8).map(([k, ns]) => `   - ${k}（${ns.length}件：${ns.slice(0, 5).map(n => '#' + n).join(' ')}）`));
+    const w = d.writing, pct = (k: number, n: number) => (n ? Math.round(k / n * 100) + '%' : '—');
+    L.push('', `3. 書き方の守り具合：PR の題 ${pct(w.prTitle, w.prs)}・Issue の番号 ${pct(w.prLinked, w.prs)}・申告 ${pct(w.prReport, w.prs)}／Issue の「機能：」${pct(w.issueFeature, w.issues)}・「閉じる条件：」${pct(w.issueClose, w.issues)}`,
+      '   足りないもの（新しい順）：', ...w.misses.slice(0, 6).map(m => `   - ${m.type === 'pr' ? 'PR' : 'Issue'} #${m.n} ${m.t}：${m.miss.join('・')}`));
+    L.push('', `4. 申告の「足りなかった決まり」（${d.lacks.length}）：決まりに足すか、一回限りかを分ける`, ...d.lacks.slice(0, 10).map(x => `   - PR #${x.n}（${md(x.day)}）：${x.t}`));
+    const stoppedOpen = d.features.filter(f => f.state === 2 && d.issues.some(i => i.open && i.features.includes(f.id)));
+    L.push('', `5. 止まっているのに開いた Issue がある機能（${stoppedOpen.length}）：続けるか、いったん閉じるか`, ...stoppedOpen.map(f => `   - ${f.name}：開いている Issue ${d.issues.filter(i => i.open && i.features.includes(f.id)).map(i => '#' + i.number).join(' ')}`));
+    const unused = Object.entries(d.nodes).filter(([, n]) => n.note === '画面なし');
+    if (unused.length) L.push('', `6. 貯めているのに画面で使っていないデータ（${unused.length}）：使う予定があるか、止めるか`, ...unused.map(([, n]) => `   - ${n.name}`));
+    return L.join('\n');
+  }
   if (action === 'issues') {
     const which = String(a.state ?? 'open');
     const xs = d.issues.filter(i => which === 'all' ? true : which === 'closed' ? !i.open : which === 'stale' ? i.stale : i.open)

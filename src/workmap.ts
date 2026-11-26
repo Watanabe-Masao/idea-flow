@@ -244,8 +244,10 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   });
   const inSpan = prs.filter(p => idx.has(jstDay(p.merged_at)));
   const writing = writingCheck(cat, inSpan, rows.filter(i => idx.has(jstDay(i.created))), links);
-  const unmatched = inSpan.filter(p => !of.get(p.number)!.length).map(p => ({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url }));
-  return { repo, catalog: true as const, sync, today, days, features, nodes: cat.nodes, issues, unmatched, writing,
+  const unmatched = inSpan.filter(p => !of.get(p.number)!.length).map(p => ({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url, files: p.files.slice(0, 8) }));
+  // 申告の「足りなかった決まり」（週の見直しで、決まりに足すか・一回限りかを分ける材料）
+  const lacks = inSpan.flatMap(p => (parseReport(p.body)?.lack ?? []).map(t => ({ n: p.number, day: jstDay(p.merged_at), t })));
+  return { repo, catalog: true as const, sync, today, days, features, nodes: cat.nodes, issues, unmatched, lacks, writing,
     counts: { prs: inSpan.length, building: features.filter(f => f.state === 0).length, settled: features.filter(f => f.state === 1).length, stopped: features.filter(f => f.state === 2).length,
       openIssues: issues.filter(i => i.open).length, stale: issues.filter(i => i.stale).length, unused: Object.values(cat.nodes).filter(nd => nd.note === '画面なし').length } };
 }
