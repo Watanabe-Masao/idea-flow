@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "idea-flow",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-11-01",
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "ai": { "binding": "AI" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "idea-flow",
+      // wrangler d1 create idea-flow の結果の id に置き換える
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // 1日1回（日本時間 6:10）に取り込みと提案の計算を行う
+  "triggers": { "crons": ["10 21 * * *"] },
+  "vars": {
+    "LINEAR_TEAM_KEY": "WAT",
+    "GITHUB_REPO": "Watanabe-Masao/weather-note-cf",
+    // true にすると、承認した判断を Linear に書き戻す（初期値は書き戻さない）
+    "WRITE_BACK": "false"
+  }
+  // 秘密の値は wrangler secret put で設定する：
+  //   LINEAR_API_KEY  … Linear の個人用 API キー
+  //   GITHUB_TOKEN    … 読み取りだけの細かい権限のトークン（公開リポジトリなら省略可）
+  //   ADMIN_TOKEN     … 画面から承認・取り込みをするときの合言葉
+}
