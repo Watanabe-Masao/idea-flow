@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>idea-flow</title>
+<style>
+:root{color-scheme:light dark;--bg:light-dark(#d5dbe0,#16191c);--panel:light-dark(#fff,#1f2327);--ink:light-dark(#0d0f11,#eef1f3);--mute:light-dark(#5b646c,#97a1aa);--line:light-dark(#b7c0c7,#353b41);--red:#e8251a;--soft:light-dark(#eef1f3,#262b30)}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Hiragino Sans","Noto Sans JP",system-ui,sans-serif;overflow-x:clip}
+.wrap{max-width:1000px;margin:0 auto;padding:clamp(16px,3vw,32px) max(4vw,12px)}
+h1{font-size:clamp(24px,4vw,34px);line-height:1.1;margin:0 0 4px}
+.sub{color:var(--mute);font-size:14px;margin:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px;margin-top:14px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+.btn,.tab{font:inherit;font-size:14px;min-height:44px;padding:0 14px;border-radius:10px;border:1px solid var(--ink);background:transparent;color:var(--ink);cursor:pointer}
+.tab{border-radius:999px;border-color:var(--line);background:var(--panel)}.tab[aria-selected=true],.btn.p{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.btn:disabled{opacity:.5}
+input{font:inherit;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink)}
+.fig{position:relative}.fig svg{display:block;width:100%}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--mute);padding:6px 4px 0}
+.pop{position:absolute;z-index:5;width:min(360px,calc(100% - 16px));background:var(--panel);border:1px solid var(--ink);border-radius:12px;padding:10px 12px;box-shadow:0 6px 20px rgba(0,0,0,.25);font-size:14px}
+.pop ul,.items{list-style:none;margin:0;padding:0}.pop ul{max-height:300px;overflow:auto}
+.pop li,.items li{padding:8px 0;border-top:1px solid var(--line);font-size:14px}
+small{display:block;color:var(--mute);font-size:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
+h2{font-size:20px;line-height:1.25;margin:0}h3{font-size:14px;color:var(--mute);font-weight:500;margin:14px 0 4px}
+.badge{font-size:12px;padding:2px 9px;border-radius:999px;background:var(--soft);white-space:nowrap}.badge.r{background:var(--red);color:#fff}
+table{border-collapse:collapse;font-size:13px;width:100%}td,th{padding:4px 6px;border-top:1px solid var(--line);text-align:right}th:first-child,td:first-child{text-align:left}
+.scroll{overflow-x:auto}a{color:inherit}
+#msg{font-size:14px;min-height:20px;margin-top:8px}
+</style></head><body><div class="wrap">
+<h1>idea-flow</h1>
+<p class="sub">行はLinearのテーマと課題、点はGitHubのコミット。番号で確定したものは黒、意味の近さ（bge‑m3）で自動で決めたものは灰、確認待ちは赤い輪。</p>
+<div class="card" id="gate" hidden><label for="tok" class="sub">合言葉（ADMIN_TOKEN）</label><div class="row"><input id="tok" type="password" autocomplete="current-password" style="flex:1"><button class="btn p" id="saveTok">使う</button></div></div>
+<div class="tabs" role="tablist"><button class="tab" data-v="map" role="tab">流れ</button><button class="tab" data-v="pending" role="tab">確認待ち <b id="pc"></b></button><button class="tab" data-v="eval" role="tab">答え合わせ</button><button class="btn" id="sync" style="margin-left:auto">取り込み直す</button></div>
+<div id="msg" aria-live="polite"></div>
+<section id="v-map"><div class="card"><div class="row" style="margin:0 0 6px"><button class="btn" id="openAll">すべて開く</button><button class="btn" id="closeAll">すべて閉じる</button></div><div class="fig" id="fig"></div>
+<div class="legend"><span>● 番号で確定・承認済み</span><span>● <span style="color:var(--mute)">自動（近さがしきい値以上）</span></span><span style="color:var(--red)">○ 確認待ち</span><span>右端：▶進行中 ○未着手 ✓完了 ×中止 ＝重複</span></div></div>
+<div class="card" id="detail"><p class="sub">行をタップすると課題とつながり、点をタップするとコミットが出ます。</p></div></section>
+<section id="v-pending" hidden><div class="card" id="plist"></div></section>
+<section id="v-eval" hidden><div class="card" id="elist"><p class="sub">番号で確定しているコミットを正解として、bge‑m3 の近さだけでどこまで当てられるかを測ります。</p><div class="row"><button class="btn p" id="runEval">答え合わせをする</button></div></div></section>
+</div>
+<script>
+{
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let TOK='';try{TOK=localStorage.getItem('idea-flow-token')||''}catch(e){}
+async function api(path,opt={}){const r=await fetch(path,{...opt,headers:{'content-type':'application/json',authorization:'Bearer '+TOK,...(opt.headers||{})}});
+ if(r.status===401){$('#gate').hidden=false;throw new Error('合言葉を入れてください')}const b=await r.json();if(!r.ok)throw new Error(b.error||r.status);return b}
+const say=t=>{$('#msg').textContent=t};
+let M=null,open=new Set(),sel=null,VIEW='map',PENDING=[];
+const GL={started:'▶',unstarted:'○',backlog:'○',completed:'✓',canceled:'×',duplicate:'＝',triage:'○'};
+const CLOSED=new Set(['completed','canceled','duplicate']);
+let IS={},kids={},DAYS=[],TH={};
+function index(){IS=Object.fromEntries(M.issues.map(i=>[i.id,i]));TH=Object.fromEntries(M.themes.map(t=>[t.key,t.name]));kids={};
+ M.issues.forEach(i=>{const k=i.p&&IS[i.p]?i.p:'T:'+(i.c||'-');(kids[k]=kids[k]||[]).push(i.id)});
+ const today=new Date(Date.now()+9*36e5).toISOString().slice(0,10);const start=new Date(Date.parse(today)-34*864e5).toISOString().slice(0,10);
+ DAYS=[];for(let t=Date.parse(start);t<=Date.parse(today);t+=864e5)DAYS.push(new Date(t).toISOString().slice(0,10))}
+const ORD={started:0,unstarted:1,triage:1,backlog:2,completed:3,duplicate:4,canceled:5};
+const sortI=a=>a.sort((x,y)=>(ORD[IS[x].st]??9)-(ORD[IS[y].st]??9)||(+y.split('-')[1])-(+x.split('-')[1]));
+const themeKeys=()=>[...Object.keys(TH),...(kids['T:-']?['-']:[])];
+function rows(){const r=[];themeKeys().forEach(c=>{r.push({k:'T:'+c,c,d:0});if(open.has(c)){const walk=(k,d)=>sortI([...(kids[k]||[])]).forEach(id=>{r.push({k:id,c,d});walk(id,d+1)});walk('T:'+c,1)}});r.push({k:'__main',d:0});return r}
+function rowOf(c){if(c.i&&IS[c.i]&&open.has(IS[c.i].c||'-'))return c.i;const t=c.c||(c.i&&IS[c.i]?IS[c.i].c:null);return t?'T:'+t:(c.i?'T:-':'__main')}
+const fig=$('#fig');
+function draw(){if(!M)return;const W=fig.clientWidth||360,narrow=W<560,LW=narrow?150:250,X0=LW+6,X1=W-(narrow?22:28),RH=narrow?30:32,T0=6;
+ const di=Object.fromEntries(DAYS.map((d,i)=>[d,i])),x=i=>X0+i/(DAYS.length-1)*(X1-X0),R=rows(),H=T0+R.length*RH+28,y={};R.forEach((r,i)=>y[r.k]=T0+i*RH+RH/2);
+ const by={};M.commits.forEach(c=>{if(di[c.d]==null)return;const k=rowOf(c),cell=((by[k]=by[k]||{})[c.d]=by[k][c.d]||{n:0,auto:0,pend:0});cell.n++;if(c.h==='auto')cell.auto++;if(c.h==='pending')cell.pend++});
+ let s=`<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="テーマと課題ごとのコミット">`;
+ R.forEach(r=>{const yy=y[r.k],isT=r.k.startsWith('T:'),i=IS[r.k],c=by[r.k]||{},ds=Object.keys(c);
+  s+=`<g data-k="${esc(r.k)}" style="cursor:pointer"><rect x="0" y="${yy-RH/2}" width="${W}" height="${RH}" fill="${sel===r.k?'var(--soft)':'transparent'}"/>`;
+  for(let k=1;k<=Math.min(r.d,4);k++)s+=`<line x1="${k*12}" y1="${yy-RH/2}" x2="${k*12}" y2="${yy+RH/2}" stroke="var(--line)"/>`;
+  const lab=r.k==='__main'?'本流（テーマなし）':isT?(open.has(r.c)?'▾ ':'▸ ')+(r.c==='-'?'テーマ未設定':TH[r.c]):i.t.replace(/^#\d+\s*/,'');
+  const mx=(ds.length||isT||r.k==='__main')?(narrow?Math.max(6,11-r.d):24):(narrow?Math.max(12,24-r.d*2):48);
+  const wait=isT?M.issues.some(z=>(z.c||'-')===r.c&&z.l.includes('判断待ち')&&!CLOSED.has(z.st)):i&&i.l.includes('判断待ち');
+  s+=`<text x="${8+Math.min(r.d,4)*12}" y="${yy}" dominant-baseline="central" font-size="${narrow?12:14}" font-weight="${isT?700:400}" fill="${r.k==='__main'||(i&&CLOSED.has(i.st))?'var(--mute)':'var(--ink)'}">${esc(lab.length>mx?lab.slice(0,mx-1)+'…':lab)}${wait?'<tspan fill="var(--red)" font-weight="700"> ！</tspan>':''}</text>`;
+  if(ds.length){const idx=ds.map(d=>di[d]),a=Math.min(...idx),b=Math.max(...idx),stale=DAYS.length-1-b>=6;
+   s+=`<line x1="${x(a)}" y1="${yy}" x2="${x(b)}" y2="${yy}" stroke="${stale?'var(--red)':'var(--ink)'}" stroke-width="1.2" opacity=".5"/>`;
+   ds.forEach(d=>{const e=c[d],rr=Math.min(narrow?8:10,2.4+Math.sqrt(e.n)*(narrow?1.5:1.8)),cx=x(di[d]);
+    s+=`<circle cx="${cx}" cy="${yy}" r="${Math.max(rr,Math.min(12,(X1-X0)/(DAYS.length*2)))}" fill="transparent" data-dot="${d}" data-dk="${esc(r.k)}"/>`;
+    s+=e.pend===e.n?`<circle cx="${cx}" cy="${yy}" r="${rr}" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6" pointer-events="none"/>`
+      :`<circle cx="${cx}" cy="${yy}" r="${rr}" fill="${r.k==='__main'||e.auto+e.pend===e.n?'var(--mute)':'var(--ink)'}" pointer-events="none"/>${e.pend?`<circle cx="${cx}" cy="${yy}" r="${rr+2}" fill="none" stroke="var(--red)" stroke-width="1.2" pointer-events="none"/>`:''}`})}
+  if(i)s+=`<text x="${W-6}" y="${yy}" text-anchor="end" dominant-baseline="central" font-size="13" fill="${i.st==='started'?'var(--ink)':'var(--mute)'}">${GL[i.st]||''}</text>`;
+  if(isT){const n=M.issues.filter(z=>(z.c||'-')===r.c&&!CLOSED.has(z.st)).length;s+=`<text x="${W-6}" y="${yy}" text-anchor="end" dominant-baseline="central" font-size="12" fill="var(--mute)">${n||''}</text>`}
+  s+=`</g>`});
+ if(sel&&IS[sel]){const ln=links(sel);ln.forEach(([t,k])=>{const tk=y[k]!=null?k:IS[k]?'T:'+(IS[k].c||'-'):null;if(!tk||y[tk]==null)return;
+  s+=`<path d="M${W-22} ${y[sel]} C ${W-62} ${y[sel]}, ${W-62} ${y[tk]}, ${W-22} ${y[tk]}" fill="none" stroke="${t==='重複'?'var(--mute)':'var(--red)'}" stroke-width="1.5" ${t==='関連'?'stroke-dasharray="4 3"':t==='重複'?'stroke-dasharray="1 3"':''}/>`})}
+ const ay=H-20;s+=`<line x1="${X0}" y1="${ay}" x2="${X1}" y2="${ay}" stroke="var(--line)"/>`;
+ [0,Math.floor((DAYS.length-1)/2),DAYS.length-1].forEach(i=>s+=`<text x="${x(i)}" y="${ay+15}" text-anchor="middle" font-size="12" fill="var(--mute)">${DAYS[i].slice(5).replace('-','/')}</text>`);
+ fig.innerHTML=s+'</svg>'}
+function links(id){const i=IS[id],out=[];if(i.p)out.push(['親',i.p]);(kids[id]||[]).forEach(k=>out.push(['子',k]));
+ M.relations.forEach(r=>{const t=r.type==='duplicate'?'重複':r.type==='related'?'関連':r.type;if(r.a===id)out.push([t,r.b]);if(r.b===id)out.push([t,r.a])});return out}
+const HOW={number:'番号で確定',manual:'手で振り分け',accepted:'承認済み',auto:'自動（近さ）',pending:'確認待ち',none:'本流'};
+function cLi(c){return`<li>${esc(c.m)}<small>${c.d.slice(5).replace('-','/')}・${HOW[c.h]}${c.sc!=null?'（近さ '+(+c.sc).toFixed(2)+'）':''}${c.i?'・'+esc(c.i):''}${c.pr?'・PR #'+esc(c.pr):''} ・ <a href="${esc(c.u)}" target="_blank" rel="noopener">コミット</a></small>${c.h==='pending'&&c.sg?`<div class="row"><button class="btn p" data-dec="accept" data-id="${esc(c.sg)}">承認</button><button class="btn" data-dec="reject" data-id="${esc(c.sg)}">却下</button></div>`:''}</li>`}
+function detail(){const el=$('#detail');if(!sel){el.innerHTML='<p class="sub">行をタップすると課題とつながり、点をタップするとコミットが出ます。</p>';return}
+ const cs=M.commits.filter(c=>rowOf(c)===sel).reverse();
+ if(sel==='__main'){el.innerHTML=`<h2>本流（テーマなし）</h2><p class="sub">番号もなく、どのテーマにも近くなかったコミット ${cs.length}件</p><ul class="items">${cs.slice(0,10).map(cLi).join('')}</ul>`;return}
+ if(sel.startsWith('T:')){const c=sel.slice(2),is=sortI(M.issues.filter(z=>(z.c||'-')===c).map(z=>z.id)),all=M.commits.filter(z=>(z.c||(z.i&&IS[z.i]?IS[z.i].c:null))===c),cnt={};all.forEach(z=>cnt[z.h]=(cnt[z.h]||0)+1);
+  const pr=M.premises.find(p=>p.subject===c);
+  el.innerHTML=`<h2>${esc(c)} ${esc(TH[c]||'テーマ未設定')}</h2><p class="sub">コミット ${all.length}件（${Object.entries(cnt).map(([k,v])=>HOW[k]+' '+v).join('・')}）</p>${pr?`<p class="sub">前提の候補：${esc(pr.target)} ${esc(TH[pr.target]||'')}（近さ ${(+pr.score).toFixed(2)}・${pr.status==='accepted'?'承認済み':'確認待ち'}）</p>`:''}
+  <h3>課題</h3><ul class="items">${is.map(id=>{const i=IS[id];return`<li><a href="${esc(i.u)}" target="_blank" rel="noopener">${esc(id)}</a> ${esc(i.t)}<small>${esc(i.s)}${i.l.length?'・'+i.l.map(esc).join('・'):''}</small></li>`}).join('')||'<li>課題はありません</li>'}</ul>`;return}
+ const i=IS[sel];el.innerHTML=`<h2>${esc(i.t)}</h2><p class="sub"><span class="badge${i.l.includes('判断待ち')?' r':''}">${esc(i.s)}</span> ${esc(i.c||'')} ${esc(TH[i.c]||'')}・<a href="${esc(i.u)}" target="_blank" rel="noopener">Linearで開く（${esc(sel)}）</a></p>
+ <h3>つながり</h3><ul class="items">${links(sel).map(([t,k])=>`<li><b>${esc(t)}</b> ${esc(k)} ${esc(IS[k]?IS[k].t:'')}</li>`).join('')||'<li>登録された関係はありません</li>'}</ul>
+ <h3>この課題のコミット</h3><ul class="items">${cs.map(cLi).join('')||'<li>まだありません</li>'}</ul>`}
+function pop(k,d,cx,cy){closePop();const cs=M.commits.filter(c=>c.d===d&&rowOf(c)===k),el=document.createElement('div');el.className='pop';el.id='pop';
+ el.innerHTML=`<div class="row" style="justify-content:space-between;margin:0"><b>${d.slice(5).replace('-','/')}（${cs.length}件）</b><button class="btn" data-close="1" aria-label="閉じる" style="min-height:36px">×</button></div><ul>${cs.map(cLi).join('')}</ul>`;
+ fig.appendChild(el);const W=fig.clientWidth,w=el.offsetWidth;el.style.left=Math.max(8,Math.min(W-w-8,cx-w/2))+'px';el.style.top=(cy+16+el.offsetHeight>fig.clientHeight&&cy-16-el.offsetHeight>0?cy-16-el.offsetHeight:cy+16)+'px'}
+function closePop(){const p=$('#pop');if(p)p.remove()}
+const KIND={commit_issue:'コミット → 課題',commit_theme:'コミット → テーマ',new_cluster:'新しいテーマの候補',theme_premise:'テーマの前提'};
+function plist(){const el=$('#plist');$('#pc').textContent=PENDING.length||'';if(!PENDING.length){el.innerHTML='<p class="sub">確認待ちはありません。</p>';return}
+ const g={};PENDING.forEach(p=>(g[p.kind]=g[p.kind]||[]).push(p));
+ el.innerHTML=Object.entries(g).map(([k,ps])=>`<h3>${KIND[k]||k}（${ps.length}）</h3><ul class="items">${ps.slice(0,40).map(p=>{let body='';
+  if(k==='commit_issue'||k==='commit_theme'){const t=k==='commit_issue'?(IS[p.target]?p.target+' '+IS[p.target].t:p.target):(p.target+' '+(TH[p.target]||''));const alt=(p.detail.top||[]).slice(1).map(a=>`${esc(a.id)}（${(+a.score).toFixed(2)}）`).join('・');
+   body=`${esc(p.message)}<small>→ ${esc(t)}（近さ ${(+p.score).toFixed(2)}）${alt?'・次点 '+alt:''}</small>`}
+  else if(k==='new_cluster')body=`「${esc(p.detail.label)}」など ${p.detail.members.length}件<small>いちばん近い既存テーマ：${esc(p.detail.nearestTheme?p.detail.nearestTheme.id+' '+(TH[p.detail.nearestTheme.id]||'')+'（'+(+p.detail.nearestTheme.score).toFixed(2)+'）':'なし')}。承認したら Linear にテーマのラベルを作ってください。</small>`;
+  else if(k==='theme_premise')body=`${esc(p.subject)} ${esc(TH[p.subject]||'')} の前提は ${esc(p.target)} ${esc(TH[p.target]||'')}？<small>近さ ${(+p.score).toFixed(2)}・先に生まれたテーマ</small>`;
+  return`<li>${body}<div class="row"><button class="btn p" data-dec="accept" data-id="${esc(p.id)}">承認</button><button class="btn" data-dec="reject" data-id="${esc(p.id)}">却下</button></div></li>`}).join('')}</ul>${ps.length>40?`<p class="sub">ほか${ps.length-40}件</p>`:''}`).join('')}
+function pct(x){return Math.round(x*100)+'%'}
+async function runEval(){say('答え合わせ中…');const e=await api('/api/eval');say('');
+ const tbl=s=>`<div class="scroll"><table><tr><th>しきい値</th><th>件数</th><th>カバー</th><th>当たり</th></tr>${s.filter((r,i)=>i%2===0).map(r=>`<tr><td>${r.threshold.toFixed(2)}</td><td>${r.covered}</td><td>${pct(r.coverage)}</td><td>${pct(r.precision)}</td></tr>`).join('')}</table></div>`;
+ $('#elist').innerHTML=`<h2>答え合わせ（正解 ${e.groundTruth}件）</h2><p class="sub">${esc(e.note)}</p>
+ <h3>課題を当てる：1位が正解 ${pct(e.issue.top1Accuracy)}</h3><p class="sub">目安：自動 ${e.issue.suggestedAuto??'—'}・確認待ち ${e.issue.suggestedAsk??'—'}</p>${tbl(e.issue.sweep)}
+ <h3>テーマを当てる：1位が正解 ${pct(e.theme.top1Accuracy)}</h3><p class="sub">目安：自動 ${e.theme.suggestedAuto??'—'}・確認待ち ${e.theme.suggestedAsk??'—'}</p>${tbl(e.theme.sweep)}
+ <div class="row"><button class="btn p" id="applyEval">この目安をしきい値にする</button></div>
+ <h3>外れた例</h3><ul class="items">${e.misses.map(m=>`<li>${esc(m.message)}<small>正解 ${esc(m.truth)}・推定 ${esc(m.guess)}（${m.score}）</small></li>`).join('')||'<li>ありません</li>'}</ul>`;
+ $('#applyEval').onclick=async()=>{const b={};if(e.issue.suggestedAuto)b.issue_auto=e.issue.suggestedAuto;if(e.issue.suggestedAsk)b.issue_ask=e.issue.suggestedAsk;if(e.theme.suggestedAuto)b.theme_auto=e.theme.suggestedAuto;if(e.theme.suggestedAsk)b.theme_ask=e.theme.suggestedAsk;
+  await api('/api/settings',{method:'POST',body:JSON.stringify(b)});say('しきい値を保存しました。提案を計算し直します…');await api('/api/suggest',{method:'POST'});await load();say('計算し直しました')}}
+function view(){document.querySelectorAll('.tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===VIEW));['map','pending','eval'].forEach(v=>$('#v-'+v).hidden=v!==VIEW);if(VIEW==='map')draw();if(VIEW==='pending')plist()}
+function all(){draw();detail();plist()}
+async function load(){try{M=await api('/api/map');PENDING=await api('/api/pending');$('#gate').hidden=true;index();all();if(!M.commits.length)say('まだデータがありません。「取り込み直す」を押してください。')}catch(e){say(e.message)}}
+fig.addEventListener('click',e=>{if(e.target.closest('#pop'))return;const dot=e.target.closest('[data-dot]');
+ if(dot){const r=fig.getBoundingClientRect(),c=dot.getBoundingClientRect();sel=dot.dataset.dk;draw();detail();pop(sel,dot.dataset.dot,c.left+c.width/2-r.left,c.top+c.height/2-r.top);return}
+ const g=e.target.closest('g[data-k]');if(!g)return;const k=g.dataset.k;if(k.startsWith('T:')){const c=k.slice(2);if(sel===k||!open.has(c)){open.has(c)?open.delete(c):open.add(c)}}sel=k;draw();detail()});
+document.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b){if(!e.target.closest('#pop,[data-dot],a'))closePop();return}
+ try{
+ if(b.dataset.close)return closePop();
+ if(b.classList.contains('tab')){VIEW=b.dataset.v;view();return}
+ if(b.id==='saveTok'){TOK=$('#tok').value.trim();try{localStorage.setItem('idea-flow-token',TOK)}catch(_){}await load();return}
+ if(b.id==='openAll'){themeKeys().forEach(c=>open.add(c));draw();return}if(b.id==='closeAll'){open.clear();draw();return}
+ if(b.id==='sync'){b.disabled=true;say('Linear と GitHub から取り込み、埋め込みと提案を計算しています…');const r=await api('/api/sync',{method:'POST'});
+  say(`取り込み：課題 ${r.linear.issues}・コミット ${r.github.commits}／埋め込み ${r.embeddings.embedded}件／提案：課題 ${r.suggestions.commitIssue}・テーマ ${r.suggestions.commitTheme}・新しい塊 ${r.suggestions.newClusters}`);b.disabled=false;await load();return}
+ if(b.id==='runEval'){await runEval();return}
+ if(b.dataset.dec){b.disabled=true;await api('/api/decide',{method:'POST',body:JSON.stringify({id:b.dataset.id,decision:b.dataset.dec})});closePop();await load();say(b.dataset.dec==='accept'?'承認しました':'却下しました');return}
+ }catch(err){say(err.message);b.disabled=false}});
+const ro=new ResizeObserver(()=>draw());ro.observe(fig);
+if(!TOK)$('#gate').hidden=false;else load();
+}
+</script></body></html>
