@@ -53,7 +53,8 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
   const d = await load(env, a, Math.min(60, Math.max(7, Number(a.span) || 21)));
   const c = d.counts;
   if (action === 'map') {
-    const L = [`■ ${d.repo} の地図（${md(d.today)} まで${d.days.length}日・PR ${c.prs}件）`,
+    const rv = d.sync?.reviewed_at ? new Date(Date.parse(d.sync.reviewed_at) + 9 * 3600e3).toISOString().slice(0, 10) : null;
+    const L = [`■ ${d.repo} の地図（${md(d.today)} まで${d.days.length}日・PR ${c.prs}件）　毎日の見直し：${rv === d.today ? '今日は済み' : `今日はまだ（前回 ${rv ? md(rv) : 'なし'}）→ action="review"`}`,
       `作っている ${c.building}・落ち着いた ${c.settled}・止まっている ${c.stopped}／開いている Issue ${c.openIssues}（古くなっている候補 ${c.stale}）／どの機能にも当たらない作業 ${d.unmatched.length}／貯めているが画面なしのデータ ${c.unused}`, ''];
     let g = '';
     for (const f of d.features) {
@@ -103,22 +104,34 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
     return L.join('\n');
   }
   if (action === 'review') {
-    // 週1回の見直し：人が決めることだけを、決めやすい順に並べる（docs/operation.md）
-    const L = [`■ ${d.repo} の週の見直し（${md(d.today)}・直近${d.days.length}日）`, '決めるのは人です。それぞれ「案」を添えています。', ''];
-    const stale = d.issues.filter(i => i.stale);
-    L.push(`1. 古くなっている候補の Issue（${stale.length}）：閉じる／その機能の「残り」に寄せる／そのまま、を決める`, ...stale.map(i => '   - ' + issueLine(d, i)));
-    const dirs = new Map<string, number[]>();
-    for (const p of d.unmatched) for (const f of new Set(p.files.map(x => x.split('/').slice(0, 2).join('/')))) dirs.set(f, [...(dirs.get(f) ?? []), p.n]);
-    L.push('', `2. どの機能にも当たらない作業（${d.unmatched.length}）：カタログに機能を足すか、今のどれかの機能に含めるかを決める`,
-      ...[...dirs].sort((a, b) => b[1].length - a[1].length).slice(0, 8).map(([k, ns]) => `   - ${k}（${ns.length}件：${ns.slice(0, 5).map(n => '#' + n).join(' ')}）`));
+    // 毎日の見直し（実装担当者がその日の最初の作業の前に読む。docs/operation.md「3. 毎日の見直し」）
+    // 前回の見直しからの新しいものだけを出し、自分で直すもの／人に決めてもらうもの／待っているもの に分ける
+    const last = d.sync?.reviewed_at ?? null, since = last ? md(last.slice(0, 10)) : null;
+    const lastDay = last ? new Date(Date.parse(last) + 9 * 3600e3).toISOString().slice(0, 10) : '';
+    const isNew = (day: string) => !lastDay || day >= lastDay;
+    const L = [`■ ${d.repo} の毎日の見直し（${md(d.today)}）　前回：${since ?? 'まだ一度もない'}`, ''];
     const w = d.writing, pct = (k: number, n: number) => (n ? Math.round(k / n * 100) + '%' : '—');
-    L.push('', `3. 書き方の守り具合：PR の題 ${pct(w.prTitle, w.prs)}・Issue の番号 ${pct(w.prLinked, w.prs)}・申告 ${pct(w.prReport, w.prs)}／Issue の「機能：」${pct(w.issueFeature, w.issues)}・「閉じる条件：」${pct(w.issueClose, w.issues)}`,
-      '   足りないもの（新しい順）：', ...w.misses.slice(0, 6).map(m => `   - ${m.type === 'pr' ? 'PR' : 'Issue'} #${m.n} ${m.t}：${m.miss.join('・')}`));
-    L.push('', `4. 申告の「足りなかった決まり」（${d.lacks.length}）：決まりに足すか、一回限りかを分ける`, ...d.lacks.slice(0, 10).map(x => `   - PR #${x.n}（${md(x.day)}）：${x.t}`));
+    const mine = w.misses.filter(m => isNew(m.day));
+    L.push(`1. 自分で直すもの：書き方の足りないもの（前回から ${mine.length}件）。自分の PR・Issue なら、題・説明を直す。ほかの人のものなら、2 に回す`,
+      ...mine.slice(0, 10).map(m => `   - ${m.type === 'pr' ? 'PR' : 'Issue'} #${m.n} ${m.t}：${m.miss.join('・')}`),
+      `   （直近${d.days.length}日の守り具合：PR の題 ${pct(w.prTitle, w.prs)}・Issue の番号 ${pct(w.prLinked, w.prs)}・申告 ${pct(w.prReport, w.prs)}／Issue の「機能：」${pct(w.issueFeature, w.issues)}・「閉じる条件：」${pct(w.issueClose, w.issues)}）`);
+    const um = d.unmatched.filter(p => isNew(p.day)), dirs = new Map<string, number[]>();
+    for (const p of um) for (const f of new Set(p.files.map(x => x.split('/').slice(0, 2).join('/')))) dirs.set(f, [...(dirs.get(f) ?? []), p.n]);
+    const lk = d.lacks.filter(x => isNew(x.day));
+    L.push('', `2. 人に決めてもらうもの（前回から新しく出たもの）`,
+      `   a. どの機能にも当たらない作業 ${um.length}件 → カタログに足すか、今の機能に含めるか（案を添える）`,
+      ...[...dirs].sort((x, y) => y[1].length - x[1].length).slice(0, 6).map(([k, ns]) => `      - ${k}（${ns.map(n => '#' + n).join(' ')}）`),
+      `   b. 申告の「足りなかった決まり」${lk.length}件 → 決まりに足すか、一回限りか（よく出るものは足す案に）`,
+      ...lk.slice(0, 8).map(x => `      - PR #${x.n}：${x.t}`));
+    const stale = d.issues.filter(i => i.stale);
     const stoppedOpen = d.features.filter(f => f.state === 2 && d.issues.some(i => i.open && i.features.includes(f.id)));
-    L.push('', `5. 止まっているのに開いた Issue がある機能（${stoppedOpen.length}）：続けるか、いったん閉じるか`, ...stoppedOpen.map(f => `   - ${f.name}：開いている Issue ${d.issues.filter(i => i.open && i.features.includes(f.id)).map(i => '#' + i.number).join(' ')}`));
-    const unused = Object.entries(d.nodes).filter(([, n]) => n.note === '画面なし');
-    if (unused.length) L.push('', `6. 貯めているのに画面で使っていないデータ（${unused.length}）：使う予定があるか、止めるか`, ...unused.map(([, n]) => `   - ${n.name}`));
+    const unused = Object.values(d.nodes).filter(n => n.note === '画面なし');
+    L.push('', '3. 人の判断を待っているもの（前からのもの。増えたときだけ人に伝える）',
+      `   - 古くなっている候補の Issue ${stale.length}件：${stale.map(i => '#' + i.number).join(' ') || 'なし'}`,
+      `   - 止まっているのに開いた Issue がある機能 ${stoppedOpen.length}：${stoppedOpen.map(f => f.name).join('、') || 'なし'}`,
+      `   - 貯めているのに画面で使っていないデータ ${unused.length}：${unused.map(n => n.name).join('、') || 'なし'}`);
+    L.push('', '人への伝え方：1 は直したことを1行で。2 は案を添えて決めてもらう。3 は数が増えたときだけ。どれも無ければ「見直し：変わりなし」と1行で。');
+    if (!a.peek) await env.DB.prepare('UPDATE map_sync SET reviewed_at = ? WHERE repo = ?').bind(new Date().toISOString(), d.repo).run();
     return L.join('\n');
   }
   if (action === 'issues') {

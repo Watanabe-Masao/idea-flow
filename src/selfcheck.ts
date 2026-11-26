@@ -14,7 +14,8 @@ export const WRITING_RULES = `書き方の決まり（地図を働かせるた�
 6. やり残しは新しい Issue にせず、その機能の「残り」の Issue に足す。分けるときは「#n の続き」。
 7. 新しい機能を作ったら、idea-flow の src/catalogs.ts に足す（同じ PR でよい）。
 8. 出す前に check（下書き）、出したあとに check（番号）で自己チェックし、✗ を直す。
-9. マージのあと、本番に出たかを確かめる。決めるのは人。人の OK なしに閉じたり消したりしない。`;
+9. その日の最初の作業の前に review（毎日の見直し）を読み、自分の書き方の足りないものは直す。人に決めてもらうものは案を添えて伝える。
+10. マージのあと、本番に出たかを確かめる。決めるのは人。人の OK なしに閉じたり消したりしない。`;
 
 type Item = { ok: boolean | null; what: string; fix?: string };
 const show = (xs: Item[]) => xs.map(x => `${x.ok === true ? '✓' : x.ok === false ? '✗' : '・'} ${x.what}${x.ok === false && x.fix ? `\n    直し方：${x.fix}` : ''}`).join('\n');

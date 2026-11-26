@@ -192,12 +192,12 @@ export function parseReport(body: string) {
  * - PR：題の頭が機能の名前か別名（「満月の物語：…」）／Issue を番号で書いている（閉じた・参照）／申告の3つの見出し
  * - Issue：本文に「機能：」の行／「閉じる条件：」の行
  */
-export function writingCheck(cat: Catalog, prs: Pr[], issues: { number: number; title: string; body: string }[], links: Map<number, Link[]>) {
+export function writingCheck(cat: Catalog, prs: Pr[], issues: { number: number; title: string; body: string; created?: string }[], links: Map<number, Link[]>) {
   const names = new Set(cat.features.flatMap(f => [f.name, f.name.replace(/（.*）/, ''), ...f.aliases]));
   const titled = (t: string) => { const h = t.split(/[：:]/)[0].trim(); return h !== t.trim() && (names.has(h) || [...names].some(n => n && h.startsWith(n))); };
   const linkedPrs = new Set([...links.values()].flatMap(L => L.filter(l => l.type === 'pr' && l.kind !== 'candidate').map(l => l.n)));
-  const P = prs.map(p => ({ n: p.number, t: p.title, url: p.url, miss: [!titled(p.title) && '題の頭に機能名', !linkedPrs.has(p.number) && '関係する Issue の番号', !parseReport(p.body) && '申告の3つの見出し'].filter(Boolean) as string[] }));
-  const I = issues.map(i => ({ n: i.number, t: i.title, miss: [!/^\s*(?:[-*]\s*)?\**機能\**\s*[:：]/m.test(i.body) && '本文の「機能：」', !/閉じる条件\s*[:：]/.test(i.body) && '本文の「閉じる条件：」'].filter(Boolean) as string[] }));
+  const P = prs.map(p => ({ n: p.number, t: p.title, url: p.url, day: jstDay(p.merged_at), miss: [!titled(p.title) && '題の頭に機能名', !linkedPrs.has(p.number) && '関係する Issue の番号', !parseReport(p.body) && '申告の3つの見出し'].filter(Boolean) as string[] }));
+  const I = issues.map(i => ({ n: i.number, t: i.title, day: i.created ? jstDay(i.created) : '', miss: [!/^\s*(?:[-*]\s*)?\**機能\**\s*[:：]/m.test(i.body) && '本文の「機能：」', !/閉じる条件\s*[:：]/.test(i.body) && '本文の「閉じる条件：」'].filter(Boolean) as string[] }));
   const cnt = (xs: { miss: string[] }[], m: string) => xs.filter(x => !x.miss.includes(m)).length;
   return {
     prs: P.length, prTitle: cnt(P, '題の頭に機能名'), prLinked: cnt(P, '関係する Issue の番号'), prReport: cnt(P, '申告の3つの見出し'),
@@ -214,7 +214,7 @@ const addDays = (day: string, n: number) => new Date(Date.parse(day + 'T00:00:00
  */
 export async function mapView(env: Env, repo: string, span = 21, today = jstDay(nowIso())) {
   const cat = catalogOf(repo);
-  const sync = await env.DB.prepare('SELECT pr_done, issues_at, prs_at FROM map_sync WHERE repo = ?').bind(repo).first<{ pr_done: number; issues_at: string | null; prs_at: string | null }>();
+  const sync = await env.DB.prepare('SELECT pr_done, issues_at, prs_at, reviewed_at FROM map_sync WHERE repo = ?').bind(repo).first<{ pr_done: number; issues_at: string | null; prs_at: string | null; reviewed_at: string | null }>();
   if (!cat) return { repo, catalog: false as const, sync };
   const days = Array.from({ length: span }, (_, k) => addDays(today, k - span + 1));
   const prs: Pr[] = (await env.DB.prepare('SELECT number, title, url, merged_at, files, body, closes FROM pr_activity WHERE repo = ? ORDER BY merged_at DESC').bind(repo).all<Record<string, unknown>>()).results
