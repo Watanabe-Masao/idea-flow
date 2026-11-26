@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeEnv } from './fakeenv.ts';
-import { featuresOfFiles, linkIssue, mapView, syncMap, type Catalog } from '../src/workmap.ts';
+import { featuresOfFiles, linkIssue, mapView, parseReport, syncMap, type Catalog } from '../src/workmap.ts';
 import { CATALOGS } from '../src/catalogs.ts';
 
 const CAT: Catalog = {
@@ -103,4 +103,11 @@ test('Issue とマージのつながり：閉じると書いたもの・題と�
   assert.deepEqual(m.get(11)!.map(x => [x.n, x.closes]), [[20, true], [30, false]]);
   assert.deepEqual(m.get(12)!.map(x => x.n), [30]);
   assert.equal(m.has(29), false);
+});
+
+test('PR の説明から申告を読む（見出しの名前で。なしは空）', () => {
+  const r = parseReport('変えたこと\n\n## 確かめた決まり\n- `docs/moon.md`「動き」\n- `docs/design.md`「2.1 文字」\n## 決まりになく、自分で判断した所\n- 折る位置を空白にした\n## 足りなかった決まり\n- なし\n');
+  assert.deepEqual(r, { read: ['`docs/moon.md`「動き」', '`docs/design.md`「2.1 文字」'], own: ['折る位置を空白にした'], lack: [] });
+  assert.equal(parseReport('ふつうの説明だけ'), null);
+  assert.deepEqual(parseReport('**確かめた決まり**\n- docs/a.md\n')!.read, ['docs/a.md']);
 });

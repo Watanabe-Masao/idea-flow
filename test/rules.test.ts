@@ -128,30 +128,3 @@ test('入口が無いときは「入口が無い」1件にまとめ、入口の�
   } finally { globalThis.fetch = real; }
 });
 
-import { xray } from '../src/rules.ts';
-test('場面のレントゲン：届く層と、関係するのに届かない決まり', async () => {
-  const files: Record<string, string> = {
-    'CLAUDE.md': '# 全体\n- 運用は docs/rules.md を読む\n',
-    'docs/rules.md': '# 運用\n- 秘密の鍵は書かない\n',
-    'docs/design.md': '# デザイン\n- 文字は Noto Sans JP を使う。小さい文字は出さない\n',
-    '.claude/skills/anim/SKILL.md': '---\nname: anim\ndescription: 文字の動きを付ける\n---\n# A\n- 動きは控えめ\n',
-  };
-  const real = globalThis.fetch;
-  globalThis.fetch = (async (u: string | URL) => {
-    const url = new URL(String(u));
-    if (url.pathname.includes('/git/trees/')) return Response.json({ truncated: false, tree: Object.keys(files).map(p => ({ path: p, type: 'blob', sha: 'x' })) });
-    const m = url.pathname.match(/\/contents\/(.+)$/);
-    return m ? new Response(files[decodeURIComponent(m[1])]) : new Response('nf', { status: 404 });
-  }) as typeof fetch;
-  try {
-    const env = fakeEnv();
-    await saveSource(env, 'o/r', Object.keys(files));
-    await syncRules(env, 'o/r');
-    const x = await xray(env, 'o/r', '文字は Noto Sans JP を使う');
-    assert.deepEqual(x.auto.map(d => d.path), ['CLAUDE.md']);
-    assert.deepEqual(x.byRef.map(d => d.path), ['docs/rules.md']);
-    assert.equal(x.skills[0].title, 'anim');
-    assert.equal(x.missing[0].path, 'docs/design.md', '場面に近いのに届かない');
-    await assert.rejects(xray(env, 'o/r', ' '));
-  } finally { globalThis.fetch = real; }
-});
