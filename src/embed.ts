@@ -24,7 +24,8 @@ export async function embedMany(env: Env, texts: string[]): Promise<Vec[]> {
   return out;
 }
 
-type Item = { kind: 'issue' | 'commit'; ref: string; text: string };
+export type EmbedKind = 'issue' | 'commit' | 'rule';
+export type Item = { kind: EmbedKind; ref: string; text: string };
 
 /** 文が変わったものだけ埋め込みを作り直す */
 export async function refreshEmbeddings(env: Env): Promise<{ embedded: number; skipped: number }> {
@@ -34,7 +35,15 @@ export async function refreshEmbeddings(env: Env): Promise<{ embedded: number; s
     ...issues.results.map(i => ({ kind: 'issue' as const, ref: i.id, text: embedText(i.title.replace(/^#\d+\s*/, ''), i.description?.slice(0, 300)) })),
     ...commits.results.map(c => ({ kind: 'commit' as const, ref: c.sha, text: embedText(c.message, c.body.split('\n').slice(0, 3).join(' ')) })),
   ];
-  const have = await env.DB.prepare('SELECT kind, ref, text_hash FROM embeddings WHERE model = ?').bind(MODEL).all<{ kind: string; ref: string; text_hash: string }>();
+  const embedded = await upsertEmbeddings(env, items);
+  return { embedded, skipped: items.length - embedded };
+}
+
+/** 文が変わったものだけ埋め込みを作り直して保存する。作った件数を返す */
+export async function upsertEmbeddings(env: Env, items: Item[]): Promise<number> {
+  if (!items.length) return 0;
+  const kinds = [...new Set(items.map(i => i.kind))];
+  const have = await env.DB.prepare(`SELECT kind, ref, text_hash FROM embeddings WHERE model = ? AND kind IN (${kinds.map(() => '?').join(',')})`).bind(MODEL, ...kinds).all<{ kind: string; ref: string; text_hash: string }>();
   const known = new Map(have.results.map(r => [`${r.kind}|${r.ref}`, r.text_hash]));
   const todo: (Item & { hash: string })[] = [];
   for (const it of items) {
@@ -49,10 +58,10 @@ export async function refreshEmbeddings(env: Env): Promise<{ embedded: number; s
       chunk.map((c, k) => [c.kind, c.ref, MODEL, vecs[k].length, toBlob(vecs[k]), c.hash, now]),
       'ON CONFLICT(kind, ref) DO UPDATE SET model=excluded.model, dim=excluded.dim, vec=excluded.vec, text_hash=excluded.text_hash, updated_at=excluded.updated_at'));
   }
-  return { embedded: todo.length, skipped: items.length - todo.length };
+  return todo.length;
 }
 
-export async function loadVectors(env: Env, kind: 'issue' | 'commit'): Promise<Map<string, Vec>> {
+export async function loadVectors(env: Env, kind: EmbedKind): Promise<Map<string, Vec>> {
   const rows = await env.DB.prepare('SELECT ref, vec FROM embeddings WHERE kind = ? AND model = ?').bind(kind, MODEL).all<{ ref: string; vec: ArrayBuffer }>();
   return new Map(rows.results.map(r => [r.ref, fromBlob(r.vec)]));
 }
