@@ -7,6 +7,7 @@ import { addComment, contractText, propose, requests as changeRequests, scopeTre
 import { embedMany, loadVectors } from './embed.ts';
 import { consultFor } from './consult.ts';
 import { exportPreview, projectInstruction } from './export.ts';
+import { activityView } from './activity.ts';
 import { dot } from './vec.ts';
 import { safeEqual } from './util.ts';
 
@@ -107,16 +108,17 @@ const ACTIONS: Record<string, { tool: string; summary: string }> = {
   propose: { tool: 'propose_scope_change', summary: '範囲の木の変更リクエストを出す（反映は人の承認）。args: repo, title, reason, ops' },
   search: { tool: 'search_rules', summary: '意味の近い決まりを探す。args: query, repo?, limit?' },
   consult: { tool: 'consult', summary: '人のピン・書き換え・範囲の変更の相談。args: repo?（承認待ちの一覧）／id（その変更リクエストの相談の中身。原文・書き換えたあと・効いている範囲・意味の近い決まり）' },
+  activity: { tool: 'activity', summary: '作業の記録：マージした PR ごとに、変えたファイル・範囲・関係する決まり・Claude の申告（確かめた決まり／自分で判断した所／足りなかった決まり）と、気になる所。args: repo, limit?' },
   export: { tool: 'export_preview', summary: 'CLAUDE.md に書き出す道案内（範囲の木から）と、承認した書き換えが当てはまるか。読むだけ（PR は人がアプリで出す）。args: repo' },
   project: { tool: 'project_instruction', summary: 'claude.ai のプロジェクトに貼る指示文（その範囲の契約をコネクタで読ませる）。args: repo, scope' },
   comment: { tool: 'comment', summary: '変更リクエストに返事を書く（影響と副作用の見立て）。args: id, text' },
 };
 const ENTRY = {
   name: 'idea_flow',
-  description: 'idea-flow のひとつの入口。action と args を渡す。まず action="help" で、いまできること（機能が増えても、この道具のまま使える）を確かめる。主な action：overview（診断書）・export（CLAUDE.md に書き出す道案内）・consult（人のピンや書き換えの相談）・comment（相談への返事）・xray（場面のレントゲン）・scopes（範囲の木）・contract（範囲の契約）・propose（変更リクエストを出す。反映は人の承認）・findings・read_doc・search。',
+  description: 'idea-flow のひとつの入口。action と args を渡す。まず action="help" で、いまできること（機能が増えても、この道具のまま使える）を確かめる。主な action：activity（作業の記録：Claude がしたこと）・overview（診断書）・export（CLAUDE.md に書き出す道案内）・consult（人のピンや書き換えの相談）・comment（相談への返事）・xray（場面のレントゲン）・scopes（範囲の木）・contract（範囲の契約）・propose（変更リクエストを出す。反映は人の承認）・findings・read_doc・search。',
   inputSchema: {
     type: 'object',
-    properties: { action: { type: 'string', description: 'help / overview / export / project / consult / comment / findings / read_doc / xray / scopes / contract / propose / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
+    properties: { action: { type: 'string', description: 'help / activity / overview / export / project / consult / comment / findings / read_doc / xray / scopes / contract / propose / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
     required: ['action'], additionalProperties: false,
   },
 };
@@ -249,6 +251,18 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
         for (const x of rs) L.push(`- id=${x.id}「${x.title}」（${x.by === 'ai' ? 'Claude' : '人'}・ピン ${x.ops.filter(o => o.op === 'pin').length}・書き換え ${x.ops.filter(o => o.op === 'edit').length}・範囲 ${x.ops.filter(o => o.op !== 'pin' && o.op !== 'edit').length}${x.comments.some(c => c.by === 'ai') ? '・返事済み' : ''}）`);
       }
       return text(L.length ? L.join('\n') + '\n\nid を渡すと、その相談の中身を出します（action="consult", args: {id}）。' : '承認待ちの相談はありません。');
+    }
+    case 'activity': {
+      const x = await activityView(env, String(a.repo ?? ''), num(a.limit, 15, 40) || 15);
+      const L = [`${x.repo} の作業の記録（新しい順）：${x.counts.total}件・申告あり ${x.counts.reported}・気になる所 ${x.counts.warn}${x.hasTree ? '' : '（範囲の木がまだ無いので、範囲は出ません）'}`];
+      for (const i of x.items) {
+        L.push('', `#${i.number} ${i.title}（${i.merged_at.slice(0, 10)}）［${i.state === 'ok' ? '決まりを確かめた' : i.state === 'warn' ? '気になる所あり' : '申告なし'}］`, `  範囲：${i.scopes.join('、') || 'わからない'}／変えたファイル：${i.files.slice(0, 6).join('、')}${i.files.length > 6 ? ' ほか' : ''}`);
+        L.push(`  関係する決まり：${i.expected.map(e => `${e.path}${e.confirmed ? '✓' : ''}`).join('、') || 'なし'}`);
+        if (i.report) { if (i.report.own.length) L.push(`  自分で判断：${i.report.own.join('／')}`); if (i.report.lack.length) L.push(`  足りなかった決まり：${i.report.lack.join('／')}`); }
+        for (const o of i.outside) L.push(`  ⚠ ${o}`);
+        if (i.none) L.push('  ⚠ この範囲の決まりを1つも確かめていない');
+      }
+      return text(L.join('\n'));
     }
     case 'export_preview': {
       const pv = await exportPreview(env, String(a.repo ?? ''));
