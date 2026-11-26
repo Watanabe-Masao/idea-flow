@@ -12,7 +12,7 @@ export const CATALOGS: Record<string, Catalog> = {
    "name": "満月の物語（絵本）",
    "desc": "満月の夜の絵本",
    "files": [
-    "(MoonStory|design/story|moon-story|storyPager)"
+    "(MoonStory|design/story|design-src/story|moon-story|storyPager|story-)"
    ],
    "data": [
     "calc"
@@ -369,8 +369,90 @@ export const CATALOGS: Record<string, Catalog> = {
    "aliases": [
     "確認用"
    ]
-  }
+  },
+{
+ "id": "store",
+ "group": "裏方",
+ "name": "データの取得と保存",
+ "desc": "Worker の定時処理と API、端末のデータの取り込み・保存",
+ "files": [
+  "(^worker/|^src/data/|^shared/(dates|fixed|availability|corrections|types|amedasWeather|jmaOfficial|versions|stationPlaces)|wrangler\\.jsonc)"
  ],
+ "data": [
+  "jma",
+  "om",
+  "log"
+ ],
+ "aliases": [
+  "データの形",
+  "データ",
+  "取り込み",
+  "予報の取り込み",
+  "予報の電文",
+  "原本の控え"
+ ]
+},
+{
+ "id": "research",
+ "group": "裏方",
+ "name": "研究",
+ "desc": "research/ の下調べと検証（アプリの動きには影響しない）",
+ "files": [
+  "^research/"
+ ],
+ "data": [],
+ "aliases": [
+  "研究"
+ ]
+},
+{
+ "id": "look",
+ "group": "裏方",
+ "name": "見た目の決まり",
+ "desc": "色・文字・部品・テーマ（ほかの機能に当たらない作業だけを数える）",
+ "files": [
+  "(src/styles\\.css|^src/design/|docs/design-system\\.md|src/ui/kit\\.tsx|src/ui/icons\\.tsx)"
+ ],
+ "data": [],
+ "aliases": [
+  "配色",
+  "テーマ",
+  "デザイン"
+ ],
+ "fallback": true
+},
+{
+ "id": "rules",
+ "group": "裏方",
+ "name": "決まりと文書",
+ "desc": "README・docs の決まり（ほかの機能に当たらない作業だけを数える）",
+ "files": [
+  "(^README\\.md|^docs/|^CLAUDE\\.md|^AGENTS\\.md|^\\.claude/)"
+ ],
+ "data": [],
+ "aliases": [
+  "決まり",
+  "docs"
+ ],
+ "fallback": true
+},
+{
+ "id": "ci",
+ "group": "裏方",
+ "name": "テスト・CI",
+ "desc": "テスト・e2e・GitHub Actions・脚本（ほかの機能に当たらない作業だけを数える）",
+ "files": [
+  "(^\\.github/|^e2e/|^test/|^scripts/|package(-lock)?\\.json)"
+ ],
+ "data": [],
+ "aliases": [
+  "e2e",
+  "CI",
+  "テスト"
+ ],
+ "fallback": true
+}
+],
  "nodes": {
   "jma": {
    "col": 0,

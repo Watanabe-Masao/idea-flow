@@ -27,12 +27,19 @@ css.textContent = `
 .wm-stale{color:var(--warn);background:var(--warnbg);font-size:11.5px;padding:1px 8px;border-radius:999px;margin-left:6px;white-space:nowrap}
 .wm-bar{position:fixed;left:8px;right:8px;bottom:max(10px,env(safe-area-inset-bottom));max-width:640px;margin:0 auto;background:var(--ink);color:var(--bg);border-radius:12px;padding:10px 14px;font-size:14px;line-height:1.5;z-index:20;max-height:42vh;overflow:auto}
 .wm-bar ul{margin:4px 0 0;padding-left:1.1em}.wm-bar a{color:inherit}.wm-bar .x{float:right;background:none;border:0;color:inherit;font:inherit;font-size:18px;min-width:44px;min-height:32px;cursor:pointer}
+.wm-tl{display:grid;grid-template-columns:9.5em minmax(0,1fr);gap:8px;align-items:center;padding:5px 4px;border-radius:10px;border:1px solid transparent;cursor:pointer}
+.wm-tl.on{border-color:var(--ink);border-radius:10px 10px 0 0}.wm-tl .nm{font-size:13px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.wm-track{position:relative;height:22px}.wm-track .ax{position:absolute;top:0;bottom:0;width:1px;background:var(--line)}
+.wm-track .bar{position:absolute;top:7px;height:8px;border-radius:4px;background:var(--mute);min-width:4px}
+.wm-track .bar.open{background:transparent;border:2px solid #2fae69;top:6px}.wm-track .bar.stale{border-color:var(--warn)}.wm-track .bar.done{background:#2fae69}
+.wm-track .pr{position:absolute;top:4px;width:12px;height:12px;margin-left:-6px;border-radius:50%;border:2px solid var(--ink);background:var(--panel)}.wm-track .pr.c{background:var(--ink)}
+.wm-axis{display:grid;grid-template-columns:9.5em minmax(0,1fr);gap:8px;font-size:11px;color:var(--mute);position:sticky;top:0;background:var(--panel);z-index:2;padding:6px 4px}.wm-axis div{position:relative;height:14px}.wm-axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
 .wm h3{font-size:16px;color:var(--ink);font-weight:600;margin:22px 0 2px}
 `;
 document.head.appendChild(css);
 const ST = ['作っている', '落ち着いた', '止まっている'];
 const S = {}; let EL = null, REPO = '';
-const st = r => S[r] || (S[r] = { data: null, span: 21, filt: -1, sel: null, node: null, busy: false, note: '', synced: false });
+const st = r => S[r] || (S[r] = { data: null, span: 21, view: 'feat', ifilt: 'all', isel: null, filt: -1, sel: null, node: null, busy: false, note: '', synced: false });
 const lv = n => n === 0 ? 'var(--line)' : n <= 1 ? 'var(--h1)' : n <= 3 ? 'var(--h2)' : 'var(--h3)';
 const md = d => d ? d.slice(5).replace('-', '/') : '';
 const GH = r => `https://github.com/${r}`;
@@ -73,14 +80,58 @@ function flow(d, s) {
   return `<svg id="wmflow" viewBox="0 0 ${W} ${H}" style="display:block;width:100%;height:${H}px" role="img" aria-label="データと機能のつながり">${o}</svg>`;
 }
 
+const dnum = x => Math.round(Date.parse(x + 'T00:00:00Z') / 864e5);
+const dstr = k => new Date(k * 864e5).toISOString().slice(0, 10);
+function issueView(d, s) {
+  const today = dnum(d.today), all = d.issues;
+  if (!all.length) return '<p class="sub" style="margin-top:8px">Issue がまだありません。</p>';
+  const t0 = Math.max(Math.min(...all.map(i => dnum(i.created))), today - 120), N = today - t0;
+  const x = day => `${(Math.min(Math.max(dnum(day), t0), today) - t0) / Math.max(1, N) * 100}%`;
+  // 毎日の終わりに開いていた数・その日に立てた数・閉じた数
+  const opened = [], closedN = [], openAt = [];
+  for (let k = t0; k <= today; k++) { opened.push(all.filter(i => dnum(i.created) === k).length); closedN.push(all.filter(i => i.closed && dnum(i.closed) === k).length); openAt.push(all.filter(i => dnum(i.created) <= k && (!i.closed || dnum(i.closed) > k)).length); }
+  const max = Math.max(1, ...openAt, ...opened, ...closedN), W = 100, H = 60, px = k => (k / Math.max(1, N)) * W, py = v => H - v / max * (H - 6) - 2;
+  const area = `M0 ${H} ` + openAt.map((v, k) => `L${px(k)} ${py(v)}`).join(' ') + ` L${W} ${H} Z`;
+  const bars = (arr, cls, dx) => arr.map((v, k) => v ? `<rect x="${px(k) + dx}" y="${py(v)}" width="1.2" height="${H - 2 - py(v)}" fill="${cls}"/>` : '').join('');
+  const closed = all.filter(i => !i.open), dur = closed.map(i => dnum(i.closed) - dnum(i.created)).sort((a, b) => a - b);
+  const med = dur.length ? dur[Math.floor(dur.length / 2)] : null;
+  const ticks = []; for (let k = today; k >= t0; k -= 7) ticks.push(k);
+  const axis = `<div class="wm-axis"><i></i><div>${ticks.map(k => `<span style="left:${(k - t0) / Math.max(1, N) * 100}%">${md(dstr(k))}</span>`).join('')}</div></div>`;
+  const F = { all: () => true, open: i => i.open, closed: i => !i.open, stale: i => i.stale };
+  const list = all.filter(F[s.ifilt]).sort((a, b) => a.created.localeCompare(b.created) || a.number - b.number);
+  const fname = id => d.features.find(f => f.id === id)?.name || id;
+  const rows = list.map(i => {
+    const end = i.closed || d.today, on = s.isel === i.number;
+    const prs = i.prs.map(p => `<i class="pr${p.closes ? ' c' : ''}" style="left:${x(p.day)}" title="#${p.n} ${esc(md(p.day))}"></i>`).join('');
+    const det = on ? `<div class="wm-det"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">#${i.number} ${esc(i.title)}</a>
+      <div style="margin-top:4px">立てた ${md(i.created)}${i.closed ? `・閉じた ${md(i.closed)}（${dnum(i.closed) - dnum(i.created)}日）` : `・開いたまま ${today - dnum(i.created)}日・最後に動いた ${md(i.updated)}`}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>
+      <div>機能：${esc(i.features.map(fname).join('、') || (i.nodes.length ? 'なし（画面のないデータ）' : 'どの機能にも当たらない'))}</div>
+      <h4>つながるマージ（${i.prs.length}）</h4>${i.prs.length ? `<ul>${i.prs.map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.n}</a> ${md(p.day)}${p.closes ? '（これで閉じる）' : ''} ${esc(p.t)}</li>`).join('')}</ul>` : '<div>PR の題・説明から、この Issue を指すものは見つかりません</div>'}</div>` : '';
+    return `<div class="wm-tl${on ? ' on' : ''}" data-i="${i.number}" role="button" tabindex="0" aria-expanded="${on}"><div class="nm"><b>#${i.number}</b> ${esc(i.title)}</div>
+      <div class="wm-track">${ticks.map(k => `<i class="ax" style="left:${(k - t0) / Math.max(1, N) * 100}%"></i>`).join('')}<i class="bar${i.open ? ' open' : ' done'}${i.stale ? ' stale' : ''}" style="left:${x(i.created)};width:calc(${x(end)} - ${x(i.created)})"></i>${prs}</div></div>${det}`;
+  }).join('');
+  return `<p class="sub" style="margin-top:8px">Issue を立てた日から閉じた日（開いているものは今日）までを線で、つながるマージ（PR）を点で。PR の題・説明が「#番号」でその Issue を指していればつながりとみなします。黒い点はその PR で閉じたもの。</p>
+  <div class="wm-sum"><div><b>${all.length}</b><span>立てた Issue</span></div><div><b>${closed.length}</b><span>閉じた（かかった日数の中央 ${med ?? '—'}日）</span></div>
+  <div class="hot"><b>${all.length - closed.length}</b><span>開いている</span></div><div><b style="color:var(--warn)">${all.filter(i => i.stale).length}</b><span>古くなっている候補</span></div></div>
+  <h3>開いている Issue の数の移り変わり</h3><p class="sub">面は毎日の終わりに開いていた数。緑の棒は立てた数、灰の棒は閉じた数。</p>
+  <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;width:100%;height:120px;margin-top:6px" role="img" aria-label="開いている Issue の数の移り変わり"><path d="${area}" fill="#2fae69" fill-opacity=".18" stroke="#2fae69" stroke-width=".6" vector-effect="non-scaling-stroke"/>${bars(opened, '#2fae69', 0)}${bars(closedN, 'var(--mute)', 1.4)}</svg>
+  <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--mute)"><span>${md(dstr(t0))}</span><span>いちばん多い日 ${Math.max(...openAt)}件・今 ${openAt.at(-1)}件</span><span>${md(d.today)}</span></div>
+  <h3>Issue ごとの経過</h3>
+  <div class="wm-chips">${[['all', 'すべて'], ['open', '開いている'], ['closed', '閉じた'], ['stale', '古くなっている候補']].map(([v, l]) => `<button class="wm-chip" data-ifilt="${v}" aria-pressed="${s.ifilt === v}">${l}</button>`).join('')}</div>
+  <div class="wm-legend"><span><span class="wm-sw" style="background:#2fae69"></span>閉じた</span><span><span class="wm-sw" style="border:2px solid #2fae69"></span>開いている</span><span><span class="wm-sw" style="border:2px solid var(--warn)"></span>古くなっている候補</span><span>● 閉じた PR　○ 指した PR</span></div>
+  <div class="wm-board">${axis}${rows || '<p class="sub">該当なし</p>'}</div>`;
+}
+
 function draw() {
   if (!EL) return;
   const s = st(REPO), d = s.data;
   const top = `<div class="row" style="margin-top:0"><button class="btn" id="wmsync" ${s.busy ? 'disabled' : ''}>${s.busy ? '読んでいます…' : 'GitHub から読み直す'}</button>
     <div class="seg" role="group" aria-label="期間">${[[21, '3週間'], [60, '2か月']].map(([v, l]) => `<button data-span="${v}" aria-pressed="${s.span === v}">${l}</button>`).join('')}</div></div>
+    <div class="seg" role="group" aria-label="見かた" style="margin:8px 0 0;margin-left:0">${[['feat', '機能'], ['issue', 'Issue の経過']].map(([v, l]) => `<button data-view="${v}" aria-pressed="${s.view === v}">${l}</button>`).join('')}</div>
     ${s.note ? `<p class="sub" style="margin-top:6px">${esc(s.note)}</p>` : ''}`;
   if (!d) { EL.innerHTML = `<div class="wm">${top}<p class="sub" style="margin-top:8px">読み込み中…</p></div>`; return; }
   if (!d.catalog) { EL.innerHTML = `<div class="wm">${top}<p class="sub" style="margin-top:8px">このリポジトリには、まだ機能の一覧（カタログ）がありません。<code>src/catalogs.ts</code> に足すと、地図が作られます。</p></div>`; return; }
+  if (s.view === 'issue') { EL.innerHTML = `<div class="wm">${top}${issueView(d, s)}</div>`; return; }
   const c = d.counts, n = d.days.length, step = n > 30 ? 14 : 7;
   let rows = '', g = '';
   for (const f of d.features) {
@@ -99,8 +150,8 @@ function draw() {
   <h3>機能ごとの稼働</h3><p class="sub">1マス＝1日（マージした PR の数）。マスを指でなぞると、その日の作業が下に出ます。名前を押すと中身が開きます。</p>
   <div class="wm-legend"><span><span class="wm-sw" style="background:var(--line)"></span>0</span><span><span class="wm-sw" style="background:var(--h1)"></span>1</span><span><span class="wm-sw" style="background:var(--h2)"></span>2〜3</span><span><span class="wm-sw" style="background:var(--h3)"></span>4 以上</span></div>
   <div class="wm-chips">${[['すべて', -1], ...ST.map((l, i) => [l, i])].map(([l, i]) => `<button class="wm-chip" data-filt="${i}" aria-pressed="${s.filt === i}">${l}</button>`).join('')}</div>
-  <div class="wm-days"><span></span><div class="wm-strip" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${d.days.map((x, k) => `<i class="l">${(n - 1 - k) % step === 0 ? md(x) : ''}</i>`).join('')}</div></div>
-  <div id="wmrows">${rows}</div>
+  <div class="wm-board"><div class="wm-days"><span></span><div class="wm-strip" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${d.days.map((x, k) => `<i class="l">${(n - 1 - k) % step === 0 ? md(x) : ''}</i>`).join('')}</div></div>
+  <div id="wmrows">${rows}</div></div>
   <p class="sub" style="margin-top:8px">状態：直近7日に作業なし＝止まっている。直近4日に3件以上＝作っている。それ以外＝落ち着いた。</p>
   <h3>開いている Issue と、つながる機能</h3><p class="sub">関係する機能がすべて止まっていて、Issue も7日以上動いていないものに「古くなっている候補」を付けます。閉じるかを決めるのは人です。</p>
   ${[...open].sort((a, b) => b.stale - a.stale).map(i => iline(d, i)).join('') || '<p class="sub">なし</p>'}
@@ -134,6 +185,9 @@ function bind(el) {
     const s = st(REPO), t = e.target;
     if (t.closest('#wmsync')) { sync(REPO); return; }
     const sp = t.closest('[data-span]'); if (sp) { s.span = +sp.dataset.span; hideDay(); load(REPO).then(draw).catch(err => { s.note = err.message; draw(); }); return; }
+    const vw = t.closest('[data-view]'); if (vw) { s.view = vw.dataset.view; hideDay(); draw(); return; }
+    const ifl = t.closest('[data-ifilt]'); if (ifl) { s.ifilt = ifl.dataset.ifilt; draw(); return; }
+    const tl = t.closest('.wm-tl'); if (tl && !t.closest('a')) { s.isel = s.isel === +tl.dataset.i ? null : +tl.dataset.i; draw(); return; }
     const fl = t.closest('[data-filt]'); if (fl) { s.filt = +fl.dataset.filt; draw(); return; }
     if (t.closest('.wm-scr') || t.closest('a')) return;
     const r = t.closest('.wm-row'); if (r) { hideDay(); s.sel = s.sel === r.dataset.f ? null : r.dataset.f; s.node = null; draw(); return; }
@@ -141,7 +195,7 @@ function bind(el) {
     if (g) { if (g.dataset.node) { s.node = s.node === g.dataset.node ? null : g.dataset.node; s.sel = null; draw(); }
       else { s.sel = g.dataset.feat; s.node = null; draw(); EL.querySelector(`.wm-row[data-f="${CSS.escape(s.sel)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); } }
   });
-  el.addEventListener('keydown', e => { const r = e.target.closest('.wm-row'); if (r && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); r.click(); } });
+  el.addEventListener('keydown', e => { const r = e.target.closest('.wm-row') || e.target.closest('.wm-tl'); if (r && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); r.click(); } });
 }
 
 async function render(el, repo) {

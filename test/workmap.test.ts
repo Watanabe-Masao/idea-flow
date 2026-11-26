@@ -27,7 +27,11 @@ test('ファイルから機能、Issue から機能（本文の「機能：」�
 
 test('weather-note-cf のカタログは、正規表現が正しく、データとのつながりが一覧にある', () => {
   const c = CATALOGS['Watanabe-Masao/weather-note-cf'];
-  assert.equal(c.features.length, 22);
+  assert.equal(c.features.length, 27);
+  // 見た目・文書・テストは、ほかに当たらないときだけ
+  assert.deepEqual(featuresOfFiles(c, ['src/ui/MoonStory.tsx', 'src/styles.css', 'e2e/e2e.py']), ['story']);
+  assert.deepEqual(featuresOfFiles(c, ['src/styles.css', 'e2e/e2e.py']), ['look', 'ci']);
+  assert.deepEqual(featuresOfFiles(c, ['worker/src/index.ts', 'test/x.test.ts']), ['store']);
   for (const f of c.features) { for (const rx of f.files) new RegExp(rx); for (const k of f.data) assert.ok(c.nodes[k], `${f.id} の ${k}`); }
   assert.deepEqual(featuresOfFiles(c, ['src/ui/MoonStory.tsx']), ['story']);
 });
@@ -86,4 +90,17 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
   assert.deepEqual(v.unmatched.map((p: any) => p.n), [6]);
   assert.deepEqual(v.counts, { prs: 5, building: 1, settled: 1, stopped: 1, openIssues: 2, stale: 1, unused: 1 });
   delete CATALOGS['o/r'];
+});
+
+test('Issue とマージのつながり：閉じると書いたもの・題と説明の「#数字」（Issue の番号だけ、古い順）', async () => {
+  const { prsByIssue } = await import('../src/workmap.ts');
+  const p = (number: number, day: string, title: string, body: string, closes: number[] = []) => ({ number, title, url: 'u' + number, merged_at: day + 'T03:00:00Z', files: [], body, closes });
+  const m = prsByIssue([
+    p(30, '2026-11-20', '満月の物語：残り（#11 の続き）', '関連：#12、PR #29'),
+    p(20, '2026-11-18', 'はじめ', 'Closes #11', [11]),
+    p(31, '2026-11-21', 'ほか', 'see https://x/#11 と &#11;'),
+  ], new Set([11, 12]));
+  assert.deepEqual(m.get(11)!.map(x => [x.n, x.closes]), [[20, true], [30, false]]);
+  assert.deepEqual(m.get(12)!.map(x => x.n), [30]);
+  assert.equal(m.has(29), false);
 });
