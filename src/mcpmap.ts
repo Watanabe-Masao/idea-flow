@@ -6,7 +6,7 @@ import { selfCheck, WRITING_RULES } from './selfcheck.ts';
 
 type MapData = Extract<Awaited<ReturnType<typeof mapView>>, { catalog: true }>;
 const ST = ['作っている', '落ち着いた', '止まっている'];
-const KIND: Record<string, string> = { parent: '引き継ぎ元', child: '引き継ぎ先', closes: 'これで閉じた', ref: '番号で参照', candidate: '推測（候補・確定ではない）' };
+const KIND: Record<string, string> = { parent: '親子（親）', child: '親子（子）', from: '引き継ぎ元（本文から）', to: '引き継ぎ先（本文から）', closes: 'これで閉じた', ref: '番号で参照', candidate: '推測（候補・確定ではない）' };
 const md = (d: string | null) => (d ? d.slice(5).replace('-', '/') : 'なし');
 
 /** repo を決める（省略時は、カタログがあるリポジトリが1つならそれ） */

@@ -700,6 +700,10 @@ export const CATALOGS: Record<string, Catalog> = {
     "basis"
    ]
   ]
+ ],
+ "topics": [
+  { "name": "コールドムーン", "feature": "story", "words": ["コールドムーン", "Cold Moon"] },
+  { "name": "ビーバームーン", "feature": "story", "words": ["ビーバームーン", "Beaver Moon"] }
  ]
 },
   'Watanabe-Masao/idea-flow': {

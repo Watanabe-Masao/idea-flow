@@ -14,11 +14,13 @@ export interface Catalog {
   issues: Record<string, { features: string[]; nodes: string[] }>;
   /** 題の言葉からの割り振り（[正規表現, 機能の id]） */
   words: [string, string[]][];
+  /** 機能の中の話題（作品ごとなど）。タグか、題に words のどれかがあれば、その話題に入る */
+  topics?: { name: string; feature: string; words: string[] }[];
 }
 export const catalogOf = (repo: string): Catalog | null => CATALOGS[repo] ?? null;
 
 type Pr = { number: number; title: string; url: string; merged_at: string; files: string[]; body: string; closes: number[] };
-type Issue = { number: number; open: number; title: string; body: string; created: string; updated: string; closed: string | null; refs: string };
+type Issue = { number: number; open: number; title: string; body: string; created: string; updated: string; closed: string | null; refs: string; parent?: number | null };
 
 /** 変えたファイルから機能を決める（その機能の files のどれかに当たれば、その機能の作業） */
 export function featuresOfFiles(cat: Catalog, files: string[]) {
@@ -37,12 +39,29 @@ export function tagsOf(body: string): string[] {
   if (!m) return [];
   return [...new Set(m[1].split(/[、,，\s]+/).map(w => w.replace(/^[@＠#＃]/, '').trim()).filter(w => w && !/^\d+$/.test(w)))];
 }
-/** タグを機能と話題に分ける（機能の名前・別名・id と同じなら機能、それ以外は話題） */
+/**
+ * タグを機能と話題に分ける。
+ * - カタログの話題（topics）の名前なら、その話題（＋その話題の機能）。例：コールドムーン → 話題「コールドムーン」＋満月の物語
+ * - 機能の名前・別名・id なら、その機能
+ * - それ以外は、自由な話題
+ * 別名（題の頭の照合に使う）と、話題（入り口）は別に持つので、作品ごとのタグが機能名に吸い込まれない
+ */
 export function splitTags(cat: Catalog, tags: string[]) {
   const fid = (w: string) => cat.features.find(f => f.id === w || f.name === w || f.name.replace(/（.*）/, '') === w || f.aliases.includes(w))?.id;
   const features: string[] = [], topics: string[] = [];
-  for (const t of tags) { const id = fid(t); if (id) { if (!features.includes(id)) features.push(id); } else topics.push(t); }
+  const addF = (id: string) => { if (!features.includes(id)) features.push(id); };
+  for (const t of tags) {
+    const tp = cat.topics?.find(x => x.name === t || x.words.includes(t));
+    if (tp) { if (!topics.includes(tp.name)) topics.push(tp.name); addF(tp.feature); continue; }
+    const id = fid(t); if (id) addF(id); else if (!topics.includes(t)) topics.push(t);
+  }
   return { features, topics };
+}
+/** 題（とタグ）から入る話題：タグの話題＋カタログの話題の言葉が題にあるもの */
+export function topicsOf(cat: Catalog, title: string, body: string) {
+  const out = splitTags(cat, tagsOf(body)).topics;
+  for (const tp of cat.topics ?? []) if (!out.includes(tp.name) && tp.words.some(w => title.includes(w))) out.push(tp.name);
+  return out;
 }
 
 export function linkIssue(cat: Catalog, i: { number: number; title: string; body: string }): { features: string[]; nodes: string[]; how: string } {
@@ -80,8 +99,8 @@ async function graphql<T>(env: Env, query: string, variables: Record<string, unk
   throw new Error('GitHub（GraphQL）: ' + last);
 }
 
-const PR_Q = `query($o:String!,$n:String!,$after:String,$dir:OrderDirection!,$field:IssueOrderField!){repository(owner:$o,name:$n){pullRequests(states:MERGED,first:50,after:$after,orderBy:{field:$field,direction:$dir}){pageInfo{hasNextPage endCursor} nodes{number title url mergedAt body files(first:100){nodes{path}} closingIssuesReferences(first:10){nodes{number}}}}}}`;
-type PrPage = { repository: { pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { number: number; title: string; url: string; mergedAt: string; body: string; files: { nodes: { path: string }[] } | null; closingIssuesReferences?: { nodes: { number: number }[] } | null }[] } } };
+const PR_Q = `query($o:String!,$n:String!,$after:String,$dir:OrderDirection!,$field:IssueOrderField!){repository(owner:$o,name:$n){pullRequests(states:MERGED,first:50,after:$after,orderBy:{field:$field,direction:$dir}){pageInfo{hasNextPage endCursor} nodes{number title url mergedAt updatedAt body files(first:100){nodes{path}} closingIssuesReferences(first:10){nodes{number}}}}}}`;
+type PrPage = { repository: { pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { number: number; title: string; url: string; mergedAt: string; updatedAt?: string; body: string; files: { nodes: { path: string }[] } | null; closingIssuesReferences?: { nodes: { number: number }[] } | null }[] } } };
 
 /**
  * 取り込み。PR は古い順に50件ずつさかのぼり（続きの位置を覚える）、毎回いちばん新しく動いた50件も読む。
@@ -90,7 +109,7 @@ type PrPage = { repository: { pullRequests: { pageInfo: { hasNextPage: boolean; 
 export async function syncMap(env: Env, repo: string, pages = 4) {
   if (!REPO_RE.test(repo)) throw new Error('リポジトリの名前が正しくありません');
   const [o, n] = repo.split('/');
-  const st = await env.DB.prepare('SELECT * FROM map_sync WHERE repo = ?').bind(repo).first<{ pr_cursor: string | null; pr_done: number }>();
+  const st = await env.DB.prepare('SELECT * FROM map_sync WHERE repo = ?').bind(repo).first<{ pr_cursor: string | null; pr_done: number; prs_at: string | null }>();
   let cursor = st?.pr_cursor ?? null, done = !!st?.pr_done, got = 0;
   const now = nowIso();
   const save = (nodes: PrPage['repository']['pullRequests']['nodes']) => nodes.map(p => env.DB.prepare(
@@ -105,22 +124,44 @@ export async function syncMap(env: Env, repo: string, pages = 4) {
     if (pr.pageInfo.endCursor) cursor = pr.pageInfo.endCursor;
     if (!pr.pageInfo.hasNextPage) done = true;
   }
-  const recent = await graphql<PrPage>(env, PR_Q, { o, n, after: null, dir: 'DESC', field: 'UPDATED_AT' });
-  stmts.push(...save(recent.repository.pullRequests.nodes));
-  // Issue（PR を除く）。100件ずつ、5ページまで
-  const issues: { number: number; state: string; title: string; body: string | null; created_at: string; updated_at: string; closed_at: string | null; pull_request?: unknown }[] = [];
-  for (let page = 1; page <= 5; page++) {
-    const part = await gh<typeof issues>(env, `/repos/${repo}/issues?state=all&per_page=100&page=${page}`);
-    issues.push(...part);
-    if (part.length < 100) break;
+  // 新しく動いた PR：前回読んだ時刻より前のものに届くまで、50件ずつ（4ページまで）
+  let after: string | null = null;
+  for (let k = 0; k < 4; k++) {
+    const rp: PrPage['repository']['pullRequests'] = (await graphql<PrPage>(env, PR_Q, { o, n, after, dir: 'DESC', field: 'UPDATED_AT' })).repository.pullRequests;
+    stmts.push(...save(rp.nodes));
+    const reached = !st?.prs_at || rp.nodes.some(p => (p.updatedAt ?? '') < st.prs_at!);
+    if (reached || !rp.pageInfo.hasNextPage) break;
+    after = rp.pageInfo.endCursor;
   }
-  for (const i of issues.filter(x => !x.pull_request))
-    stmts.push(env.DB.prepare('INSERT OR REPLACE INTO map_issues (repo, number, open, title, body, created, updated, closed, refs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(repo, i.number, i.state === 'open' ? 1 : 0, i.title, (i.body ?? '').slice(0, 4000), i.created_at, i.updated_at, i.closed_at, JSON.stringify(refLines(i.body ?? ''))));
-  stmts.push(env.DB.prepare('INSERT INTO map_sync (repo, pr_cursor, pr_done, issues_at, prs_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(repo) DO UPDATE SET pr_cursor = excluded.pr_cursor, pr_done = excluded.pr_done, issues_at = excluded.issues_at, prs_at = excluded.prs_at')
-    .bind(repo, cursor, done ? 1 : 0, now, now));
+  // Issue だけを（PR を混ぜずに）100件ずつ、10ページまで。GitHub の親子（サブ Issue）の親も読む
+  const issues = await readIssues(env, o, n);
+  for (const i of issues.list)
+    stmts.push(env.DB.prepare('INSERT OR REPLACE INTO map_issues (repo, number, open, title, body, created, updated, closed, refs, parent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(repo, i.number, i.state === 'OPEN' ? 1 : 0, i.title, (i.body ?? '').slice(0, 4000), i.createdAt, i.updatedAt, i.closedAt, JSON.stringify(refLines(i.body ?? '')), i.parent?.number ?? null));
+  stmts.push(env.DB.prepare('INSERT INTO map_sync (repo, pr_cursor, pr_done, issues_at, prs_at, issues_more) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(repo) DO UPDATE SET pr_cursor = excluded.pr_cursor, pr_done = excluded.pr_done, issues_at = excluded.issues_at, prs_at = excluded.prs_at, issues_more = excluded.issues_more')
+    .bind(repo, cursor, done ? 1 : 0, now, now, issues.more ? 1 : 0));
   for (let k = 0; k < stmts.length; k += 50) await env.DB.batch(stmts.slice(k, k + 50));
-  return { prs: got, backfillDone: done, issues: issues.filter(x => !x.pull_request).length };
+  return { prs: got, backfillDone: done, issues: issues.list.length, issuesMore: issues.more };
+}
+
+type IssueNode = { number: number; state: string; title: string; body: string | null; createdAt: string; updatedAt: string; closedAt: string | null; parent?: { number: number } | null };
+const ISSUE_Q = (withParent: boolean) => `query($o:String!,$n:String!,$after:String){repository(owner:$o,name:$n){issues(first:100,after:$after,orderBy:{field:CREATED_AT,direction:ASC}){pageInfo{hasNextPage endCursor} nodes{number state title body createdAt updatedAt closedAt${withParent ? ' parent{number}' : ''}}}}}`;
+/** Issue を全部読む（10ページ＝1000件まで。続きがあれば more）。親子の項目が使えない GitHub なら、親なしで読み直す */
+async function readIssues(env: Env, o: string, n: string) {
+  for (const withParent of [true, false]) {
+    try {
+      const list: IssueNode[] = []; let after: string | null = null, more = false;
+      for (let k = 0; k < 10; k++) {
+        type Pg = { repository: { issues: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: IssueNode[] } } };
+        const d: Pg = await graphql<Pg>(env, ISSUE_Q(withParent), { o, n, after });
+        list.push(...d.repository.issues.nodes);
+        more = d.repository.issues.pageInfo.hasNextPage; after = d.repository.issues.pageInfo.endCursor;
+        if (!more) break;
+      }
+      return { list, more };
+    } catch (e) { if (!withParent) throw e; }
+  }
+  return { list: [], more: false };
 }
 
 const REF_RE = /(?<![\w/&])#(\d+)\b/g;
@@ -139,17 +180,19 @@ export function refLines(text: string): { n: number; line: string }[] {
 /** 引き継ぎ（親子）の言い方：「#299 P2」「#142 の続き」「#86 の残り」「#189 から」 */
 const HANDOFF = (n: number) => new RegExp(`#${n}\\s*(の)?\\s*(P\\d|続き|残り|引き継|から分け|の一部)`);
 
-export type Link = { kind: 'closes' | 'ref' | 'parent' | 'child' | 'candidate'; type: 'pr' | 'issue'; n: number; title: string; day: string; url: string; open?: boolean; evidence: string[] };
+export type Link = { kind: 'closes' | 'ref' | 'parent' | 'child' | 'from' | 'to' | 'candidate'; type: 'pr' | 'issue'; n: number; title: string; day: string; url: string; open?: boolean; evidence: string[] };
 
 /**
  * Issue のつながり（根拠つき）。
  * - closes：その PR で閉じた（GitHub の closingIssuesReferences）
  * - ref：PR の題・説明か、Issue の本文に「#番号」がある（明示）
- * - parent／child：題か本文に「#299 P2」「#142 の続き」のような引き継ぎの言い方がある
+ * - parent／child：GitHub の親子（サブ Issue）。いちばん確か
+ * - from／to（引き継ぎ元・先）：題か本文に「#299 P2」「#142 の続き」のような引き継ぎの言い方がある（本文からの推定）
  * - candidate（推測）：開いている Issue と同じ機能のファイルを、その Issue が開いていた間に変えた PR。
- *   ほかの Issue を番号で指している PR と、見た目・文書・テストだけの PR は出さない。新しいもの5件まで
+ *   ほかの Issue を番号で指している PR・「関連：なし」と書いた PR・見た目・文書・テストだけの PR は出さない。
+ *   Issue を立てた時刻より後にマージしたもの（日付ではなく時刻で比べる）。新しいもの5件まで
  */
-export function issueLinks(repo: string, issues: { number: number; open: boolean; title: string; created: string; closed: string | null; features: string[]; refs: { n: number; line: string }[] }[],
+export function issueLinks(repo: string, issues: { number: number; open: boolean; title: string; created: string; closed: string | null; features: string[]; refs: { n: number; line: string }[]; parent?: number | null }[],
   prs: (Pr & { features: string[] })[]) {
   const iss = new Map(issues.map(i => [i.number, i])), pr = new Map(prs.map(p => [p.number, p]));
   const out = new Map<number, Link[]>(issues.map(i => [i.number, []]));
@@ -167,6 +210,10 @@ export function issueLinks(repo: string, issues: { number: number; open: boolean
     }
   }
   for (const i of issues) {
+    const pa = i.parent != null ? iss.get(i.parent) : undefined;
+    if (pa) { add(i.number, isLink(pa, 'parent', `GitHub の親子：#${pa.number} のサブ Issue`)); add(pa.number, isLink(i, 'child', `GitHub の親子：#${i.number} がサブ Issue`)); }
+  }
+  for (const i of issues) {
     const titleRefs = refLines(i.title).map(x => ({ ...x, line: `題：${x.line}` })), bodyRefs = i.refs.map(x => ({ ...x, line: `本文：${x.line}` }));
     for (const { n, line } of [...titleRefs, ...bodyRefs]) {
       if (n === i.number) continue;
@@ -174,19 +221,21 @@ export function issueLinks(repo: string, issues: { number: number; open: boolean
       if (p) { add(i.number, prLink(p, 'ref', `Issue #${i.number} の${line}`)); explicit.add(p.number); continue; }
       const j = iss.get(n); if (!j) continue;
       const handoff = HANDOFF(n).test(line);
-      add(i.number, isLink(j, handoff ? 'parent' : 'ref', `Issue #${i.number} の${line}`));
-      add(n, isLink(i, handoff ? 'child' : 'ref', `Issue #${i.number} の${line}`));
+      // GitHub の親子があるなら、本文の言い方は根拠として足すだけ（種類は親子のまま）
+      const official = out.get(i.number)!.some(l => l.type === 'issue' && l.n === n && (l.kind === 'parent' || l.kind === 'child'));
+      if (official) { const L1 = out.get(i.number)!.find(l => l.type === 'issue' && l.n === n)!, L2 = out.get(n)!.find(l => l.type === 'issue' && l.n === i.number)!; for (const L of [L1, L2]) if (L) L.evidence.push(`Issue #${i.number} の${line}`); continue; }
+      add(i.number, isLink(j, handoff ? 'from' : 'ref', `Issue #${i.number} の${line}`));
+      add(n, isLink(i, handoff ? 'to' : 'ref', `Issue #${i.number} の${line}`));
     }
   }
   for (const i of issues) {
     if (!i.open || !i.features.length) continue;
     const linked = new Set(out.get(i.number)!.filter(l => l.type === 'pr').map(l => l.n));
-    const from = jstDay(i.created);
-    const cands = prs.filter(p => !linked.has(p.number) && !explicit.has(p.number) && jstDay(p.merged_at) >= from && p.features.some(f => i.features.includes(f)))
+    const cands = prs.filter(p => !linked.has(p.number) && !explicit.has(p.number) && !/関連\s*[:：]\s*なし/.test(p.body) && p.merged_at >= i.created && p.features.some(f => i.features.includes(f)))
       .sort((a, b) => b.merged_at.localeCompare(a.merged_at)).slice(0, 5);
     for (const p of cands) add(i.number, prLink(p, 'candidate', `同じ機能のファイルを変えた（${p.files.slice(0, 3).join('、')}${p.files.length > 3 ? ' ほか' : ''}）。番号でのつながりは無い`));
   }
-  for (const L of out.values()) L.sort((a, b) => ['parent', 'child', 'closes', 'ref', 'candidate'].indexOf(a.kind) - ['parent', 'child', 'closes', 'ref', 'candidate'].indexOf(b.kind) || a.day.localeCompare(b.day));
+  for (const L of out.values()) { const O = ['parent', 'child', 'from', 'to', 'closes', 'ref', 'candidate']; L.sort((a, b) => O.indexOf(a.kind) - O.indexOf(b.kind) || a.day.localeCompare(b.day)); }
   return out;
 }
 
@@ -194,18 +243,21 @@ export function issueLinks(repo: string, issues: { number: number; open: boolean
 export function parseReport(body: string) {
   const sec = { read: [] as string[], own: [] as string[], lack: [] as string[] };
   const KEYS: [keyof typeof sec, RegExp][] = [['read', /確かめた決まり/], ['own', /自分で判断/], ['lack', /足りなかった決まり/]];
-  let cur: keyof typeof sec | null = null, found = false;
+  let cur: keyof typeof sec | null = null;
+  const found = new Set<keyof typeof sec>();
   for (const raw of String(body ?? '').split(/\r?\n/)) {
     const line = raw.trim();
     const head = line.match(/^(#{1,6}\s+|\*\*)(.+?)(\*\*)?[:：]?$/);
-    if (head) { const k = KEYS.find(([, re]) => re.test(head[2])); cur = k ? k[0] : null; if (k) found = true; continue; }
+    if (head) { const k = KEYS.find(([, re]) => re.test(head[2])); cur = k ? k[0] : null; if (k) found.add(k[0]); continue; }
     if (!cur) continue;
     if (/^([-*_])\1{2,}$/.test(line)) { cur = null; continue; } // 区切り線（---）で見出しの中身は終わり
     const it = line.match(/^[-*・]\s*(.+)$/);
     if (it && !/^(なし|特になし|無し)[。．]?$/.test(it[1].trim())) sec[cur].push(it[1].trim());
   }
-  return found ? sec : null;
+  return found.size ? { ...sec, found: [...found], complete: found.size === 3 } : null;
 }
+/** 申告の3つの見出しがすべてあるか（自己チェック・地図の守り具合・毎日の見直しで同じ判定を使う） */
+export const reportComplete = (body: string) => !!parseReport(body)?.complete;
 
 /**
  * 書き方の守り具合（その期間にマージした PR と、立てた Issue）。CLAUDE.md の「書き方」の決まりに合わせる。
@@ -217,7 +269,7 @@ export function writingCheck(cat: Catalog, prs: Pr[], issues: { number: number; 
   const titled = (t: string) => { const h = t.split(/[：:]/)[0].trim(); return h !== t.trim() && (names.has(h) || [...names].some(n => n && h.startsWith(n))); };
   const linkedPrs = new Set([...links.values()].flatMap(L => L.filter(l => l.type === 'pr' && l.kind !== 'candidate').map(l => l.n)));
   const noneSaid = (b: string) => /関連\s*[:：]\s*なし/.test(b); // 「関連：なし」と書いたものは守れている（書き忘れと分ける）
-  const P = prs.map(p => ({ n: p.number, t: p.title, url: p.url, day: jstDay(p.merged_at), miss: [!titled(p.title) && '題の頭に機能名', !linkedPrs.has(p.number) && !noneSaid(p.body) && '関係する Issue の番号', !parseReport(p.body) && '申告の3つの見出し'].filter(Boolean) as string[] }));
+  const P = prs.map(p => ({ n: p.number, t: p.title, url: p.url, day: jstDay(p.merged_at), miss: [!titled(p.title) && '題の頭に機能名', !linkedPrs.has(p.number) && !noneSaid(p.body) && '関係する Issue の番号', !reportComplete(p.body) && '申告の3つの見出し'].filter(Boolean) as string[] }));
   const I = issues.map(i => ({ n: i.number, t: i.title, day: i.created ? jstDay(i.created) : '', miss: [!/^\s*(?:[-*]\s*)?\**機能\**\s*[:：]/m.test(i.body) && '本文の「機能：」', !/閉じる条件\s*[:：]/.test(i.body) && '本文の「閉じる条件：」'].filter(Boolean) as string[] }));
   const cnt = (xs: { miss: string[] }[], m: string) => xs.filter(x => !x.miss.includes(m)).length;
   return {
@@ -235,13 +287,13 @@ const addDays = (day: string, n: number) => new Date(Date.parse(day + 'T00:00:00
  */
 export async function mapView(env: Env, repo: string, span = 21, today = jstDay(nowIso())) {
   const cat = catalogOf(repo);
-  const sync = await env.DB.prepare('SELECT pr_done, issues_at, prs_at, reviewed_at FROM map_sync WHERE repo = ?').bind(repo).first<{ pr_done: number; issues_at: string | null; prs_at: string | null; reviewed_at: string | null }>();
+  const sync = await env.DB.prepare('SELECT pr_done, issues_at, prs_at, reviewed_at, issues_more FROM map_sync WHERE repo = ?').bind(repo).first<{ pr_done: number; issues_at: string | null; prs_at: string | null; reviewed_at: string | null; issues_more: number }>();
   if (!cat) return { repo, catalog: false as const, sync };
   const days = Array.from({ length: span }, (_, k) => addDays(today, k - span + 1));
   const prs: Pr[] = (await env.DB.prepare('SELECT number, title, url, merged_at, files, body, closes FROM pr_activity WHERE repo = ? ORDER BY merged_at DESC').bind(repo).all<Record<string, unknown>>()).results
     .map(r => ({ ...r, files: JSON.parse(String(r.files)), closes: JSON.parse(String(r.closes ?? '[]')) }) as Pr);
   const of = new Map(prs.map(p => { const byFile = featuresOfFiles(cat, p.files), byTag = splitTags(cat, tagsOf(p.body)).features; return [p.number, [...new Set([...byFile.filter(id => !(byTag.length && cat.features.find(f => f.id === id)?.fallback)), ...byTag])]]; }));
-  const prTopics = new Map(prs.map(p => [p.number, splitTags(cat, tagsOf(p.body)).topics]));
+  const prTopics = new Map(prs.map(p => [p.number, topicsOf(cat, p.title, p.body)]));
   const idx = new Map(days.map((d, k) => [d, k]));
   const features = cat.features.map(f => {
     const mine = prs.filter(p => of.get(p.number)!.includes(f.id));
@@ -257,12 +309,12 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   const old = addDays(today, -7);
   const rows = (await env.DB.prepare('SELECT * FROM map_issues WHERE repo = ? ORDER BY open DESC, updated DESC').bind(repo).all<Issue>()).results;
   const linked = rows.map(i => ({ i, l: linkIssue(cat, i) }));
-  const links = issueLinks(repo, linked.map(({ i, l }) => ({ number: i.number, open: !!i.open, title: i.title, created: i.created, closed: i.closed, features: l.features.filter(id => !cat.features.find(f => f.id === id)?.fallback), refs: JSON.parse(i.refs || '[]') })),
+  const links = issueLinks(repo, linked.map(({ i, l }) => ({ number: i.number, open: !!i.open, title: i.title, created: i.created, closed: i.closed, features: l.features.filter(id => !cat.features.find(f => f.id === id)?.fallback), refs: JSON.parse(i.refs || '[]'), parent: i.parent ?? null })),
     prs.map(p => ({ ...p, features: of.get(p.number)!.filter(id => !cat.features.find(f => f.id === id)?.fallback) })));
   const issues = linked.map(({ i, l }) => {
     const fs = l.features.filter(id => stOf.has(id));
     const stale = !!i.open && fs.length > 0 && fs.every(id => stOf.get(id) === 2) && jstDay(i.updated) < old;
-    return { number: i.number, open: !!i.open, title: i.title, created: jstDay(i.created), updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale, links: links.get(i.number) ?? [], topics: splitTags(cat, tagsOf(i.body)).topics };
+    return { number: i.number, open: !!i.open, title: i.title, created: jstDay(i.created), updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale, links: links.get(i.number) ?? [], topics: topicsOf(cat, i.title, i.body) };
   });
   const inSpan = prs.filter(p => idx.has(jstDay(p.merged_at)));
   const writing = writingCheck(cat, inSpan, rows.filter(i => idx.has(jstDay(i.created))), links);
@@ -270,8 +322,8 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   // 申告の「足りなかった決まり」（週の見直しで、決まりに足すか・一回限りかを分ける材料）
   const lacks = inSpan.flatMap(p => (parseReport(p.body)?.lack ?? []).map(t => ({ n: p.number, day: jstDay(p.merged_at), t })));
   // 話題（機能ではないタグ）：Issue と PR を束ねる、軽い入り口。最初に出た日が新しいものは、見直しで扱う
-  const tp = new Map<string, { name: string; issues: number[]; prs: { n: number; t: string; day: string; url: string }[]; first: string; last: string }>();
-  const touch = (t: string, day: string) => { const x = tp.get(t) ?? { name: t, issues: [], prs: [], first: day, last: day }; if (day < x.first) x.first = day; if (day > x.last) x.last = day; tp.set(t, x); return x; };
+  const tp = new Map<string, { name: string; feature: string | null; issues: number[]; prs: { n: number; t: string; day: string; url: string }[]; first: string; last: string }>();
+  const touch = (t: string, day: string) => { const x = tp.get(t) ?? { name: t, feature: cat.topics?.find(y => y.name === t)?.feature ?? null, issues: [], prs: [], first: day, last: day }; if (day < x.first) x.first = day; if (day > x.last) x.last = day; tp.set(t, x); return x; };
   for (const i of issues) for (const t of i.topics) touch(t, i.created).issues.push(i.number);
   for (const p of prs) for (const t of prTopics.get(p.number) ?? []) touch(t, jstDay(p.merged_at)).prs.push({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url });
   const topics = [...tp.values()].sort((a, b) => b.last.localeCompare(a.last));

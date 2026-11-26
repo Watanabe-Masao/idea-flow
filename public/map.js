@@ -126,7 +126,7 @@ function issueView(d, s) {
     for (const l of pl) byDay.set(l.day, [...(byDay.get(l.day) || []), l]);
     const prs = [...byDay].map(([day, ls]) => { const c = ls.some(l => l.kind === 'closes'), k = ls.every(l => l.kind === 'candidate');
       return `<i class="pr${c ? ' c' : ''}${k ? ' k' : ''}" style="left:${x(day)}" title="${esc(md(day))} ${ls.map(l => '#' + l.n).join(' ')}">${ls.length > 1 ? `<b>${ls.length}</b>` : ''}</i>`; }).join('');
-    const KIND = { parent: '引き継ぎ元', child: '引き継ぎ先', closes: 'これで閉じた', ref: '番号で参照', candidate: '推測（候補）' };
+    const KIND = KNAME;
     const det = on ? `<div class="wm-det"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">#${i.number} ${esc(i.title)}</a>
       <div style="margin-top:4px">立てた ${md(i.created)}${i.closed ? `・閉じた ${md(i.closed)}（${dnum(i.closed) - dnum(i.created)}日）` : `・開いたまま ${today - dnum(i.created)}日・最後に動いた ${md(i.updated)}`}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>
       <div>機能：${esc(i.features.map(fname).join('、') || (i.nodes.length ? 'なし（画面のないデータ）' : 'どの機能にも当たらない'))}${i.how ? `（${esc(i.how)}）` : ''}</div>
@@ -149,30 +149,43 @@ function issueView(d, s) {
 }
 
 // クラスター：機能ごとに、その機能の Issue（左）と、つながる PR（右）を線で。線の種類＝つながりの種類
-const LK = { closes: ['これで閉じた', '#2fae69', ''], ref: ['番号で参照', 'var(--mute)', ''], parent: ['引き継ぎ', '#5b7fd6', ''], candidate: ['推測（候補）', '#9a6fc0', '5 4'], catalog: ['機能の割り当て', 'var(--line)', '1 4'] };
+const LK = { closes: ['これで閉じた', '#2fae69', ''], ref: ['番号で参照', 'var(--mute)', ''], parent: ['親子（GitHub）', '#3b5fc4', ''], from: ['引き継ぎ（本文から）', '#7f9be0', '6 3'], candidate: ['推測（候補）', '#9a6fc0', '5 4'], catalog: ['機能の割り当て', 'var(--line)', '1 4'] };
+const LKOF = k => LK[k === 'child' ? 'parent' : k === 'to' ? 'from' : k];
+const KNAME = { parent: '親子（親）', child: '親子（子）', from: '引き継ぎ元（本文から）', to: '引き継ぎ先（本文から）', closes: 'これで閉じた', ref: '番号で参照', candidate: '推測（候補）' };
+// Issue のつながりを、種類ごとに・全部・GitHub へのリンクつきで（クラスターと Issue の経過で同じものを使う）
+function linkList(i, s) {
+  const ls = i.links.filter(l => s.cand || l.kind !== 'candidate');
+  if (!ls.length) return '<div>番号でのつながりも、同じ機能の作業も見つかりません</div>';
+  return ls.map(l => `<div class="wm-link"><span class="wm-kind${l.kind === 'candidate' ? ' k' : ''}">${KNAME[l.kind]}</span><a href="${esc(l.url)}" target="_blank" rel="noopener">${l.type === 'pr' ? 'PR' : 'Issue'} #${l.n}</a> ${md(l.day)} ${esc(l.title)}${l.type === 'issue' ? (l.open ? '（開いている）' : '（閉じた）') : ''}${l.evidence.map(e => `<div class="ev">根拠：${esc(e)}</div>`).join('')}</div>`).join('');
+}
 function clusterView(d, s) {
   const per = d.features.map(f => ({ f, iss: d.issues.filter(i => i.features.includes(f.id)) })).filter(x => x.iss.length)
     .sort((a, b) => b.iss.filter(i => i.open).length - a.iss.filter(i => i.open).length || b.iss.length - a.iss.length);
   // 話題（機能ではないタグ）も入り口にする。id は「t:話題」。その話題の Issue と、その話題を付けた PR
-  for (const t of d.topics || []) per.push({ f: { id: 't:' + t.name, name: '話題：' + t.name, state: 1, topic: t }, iss: d.issues.filter(i => (i.topics || []).includes(t.name)) });
+  for (const t of d.topics || []) per.push({ f: { id: 't:' + t.name, name: t.feature ? `${(d.features.find(x => x.id === t.feature)?.name || '').replace(/（.*）/, '')} › ${t.name}` : '話題：' + t.name, state: 1, topic: t, data: [] }, iss: d.issues.filter(i => (i.topics || []).includes(t.name)) });
   if (!per.length) return '<p class="sub" style="margin-top:8px">機能につながる Issue がまだありません。</p>';
   if (!s.cl || !per.some(x => x.f.id === s.cl)) s.cl = per[0].f.id;
   const { f, iss: all } = per.find(x => x.f.id === s.cl);
   const inC = i => f.topic ? (i.topics || []).includes(f.topic.name) : i.features.includes(f.id);
   // Issue：開いているものすべてと、閉じたものの新しい8件まで。引き継ぎでつながる、ほかの機能の Issue も入れる
   let iss = [...all.filter(i => i.open), ...all.filter(i => !i.open).slice(0, 8)];
-  for (const i of [...iss]) for (const l of i.links) if (l.type === 'issue' && (l.kind === 'parent' || l.kind === 'child') && !iss.some(x => x.number === l.n)) { const j = d.issues.find(x => x.number === l.n); if (j) iss.push(j); }
+  for (const i of [...iss]) for (const l of i.links) if (l.type === 'issue' && ['parent', 'child', 'from', 'to'].includes(l.kind) && !iss.some(x => x.number === l.n)) { const j = d.issues.find(x => x.number === l.n); if (j) iss.push(j); }
   iss.sort((a, b) => a.created.localeCompare(b.created) || a.number - b.number);
   const prMap = new Map();
   if (f.topic) for (const p of f.topic.prs) prMap.set(p.n, { n: p.n, title: p.t, day: p.day, url: p.url, kind: 'ref', type: 'pr', edges: [] });
   for (const i of iss) for (const l of i.links) if (l.type === 'pr' && (s.cand || l.kind !== 'candidate')) { const p = prMap.get(l.n) || { ...l, edges: [] }; p.edges.push({ i: i.number, kind: l.kind, ev: l.evidence }); prMap.set(l.n, p); }
-  const prs = [...prMap.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-24);
+  // PR は新しい24件まで。ただし選んだ Issue につながる PR は、古くても全部出す
+  const selI = s.csel && s.csel.startsWith('i') ? +s.csel.slice(1) : null;
+  const allPrs = [...prMap.values()].sort((a, b) => a.day.localeCompare(b.day));
+  const keep = new Set(allPrs.slice(-24).map(p => p.n)); if (selI) allPrs.forEach(p => p.edges.some(e => e.i === selI) && keep.add(p.n));
+  const prs = allPrs.filter(p => keep.has(p.n));
   const W = Math.max(300, (EL.clientWidth || 360) - 4);
   const sel = s.csel, active = new Set();
   if (sel) { active.add(sel); if (sel.startsWith('i')) { const n = +sel.slice(1); prs.forEach(p => p.edges.some(e => e.i === n) && active.add('p' + p.n)); iss.find(i => i.number === n)?.links.forEach(l => l.type === 'issue' && active.add('i' + l.n)); } else { const p = prs.find(x => 'p' + x.n === sel); p?.edges.forEach(e => active.add('i' + e.i)); } }
   const dim = id => sel && !active.has(id);
   let lines = '', nodes = '', H;
-  if (W >= 640) {
+  const phone = W < 640;
+  if (!phone) {
   const W = Math.max(320, (EL.clientWidth || 360) - 4), gap = 44, colW = Math.floor((W - 20 - gap) / 2), H0 = 52, NH = 50, G = 8;
   const lx = 14, rx = lx + colW + gap, yP = k => H0 + k * (NH + G);
   // Issue は、つながる PR の高さの平均に置く（重ならないように下へずらす）。線が短く、交わりにくくなる
@@ -189,45 +202,35 @@ function clusterView(d, s) {
   // Issue ↔ Issue（引き継ぎ・参照）：左の外側を回る弧
   const seen = new Set();
   iss.forEach((i, k) => i.links.forEach(l => { if (l.type !== 'issue') return; const k2 = iss.findIndex(x => x.number === l.n); const key = [i.number, l.n].sort().join('-'); if (k2 < 0 || seen.has(key)) return; seen.add(key);
-    const y1 = yI(k) + NH / 2, y2 = yI(k2) + NH / 2, kind = l.kind === 'ref' ? 'ref' : 'parent', on = !sel || sel === 'i' + i.number || sel === 'i' + l.n, [, c] = LK[kind];
+    const y1 = yI(k) + NH / 2, y2 = yI(k2) + NH / 2, kind = l.kind === 'ref' ? 'ref' : ['from', 'to'].includes(l.kind) ? 'from' : 'parent', on = !sel || sel === 'i' + i.number || sel === 'i' + l.n, [, c] = LK[kind];
     lines += `<path d="M${lx + 10} ${y1} C${lx - 12} ${y1},${lx - 12} ${y2},${lx + 10} ${y2}" fill="none" stroke="${c}" stroke-width="${kind === 'parent' ? 3 : 1.4}" opacity="${sel && !on ? .12 : .9}"/>`; }));
   const node = (id, x, y, w, h, cls, sub, txt) => `<div class="wm-cn ${cls}${sel === id ? ' on' : ''}${dim(id) ? ' dim' : ''}" data-cn="${id}" role="button" tabindex="0" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px"><small>${sub}</small><span>${esc(txt)}</span></div>`;
   nodes = node('f', lx, 4, W - lx - 6, 36, 'f', `機能・${ST[f.state]}・開いている Issue ${all.filter(i => i.open).length}`, f.name);
   iss.forEach((i, k) => nodes += node('i' + i.number, lx, yI(k), colW, NH, (i.open ? 'open' : '') + (i.stale ? ' stale' : '') + (inC(i) ? '' : ' other'), `Issue #${i.number}・${i.open ? '開いている' : '閉じた ' + md(i.closed)}`, i.title));
   prs.forEach((p, k) => nodes += node('p' + p.n, rx, yP(k), colW, NH, p.edges.every(e => e.kind === 'candidate') ? 'other' : '', `PR #${p.n}・${md(p.day)}`, p.title));
-  } else {
-    // スマホ：縦に1列（機能 → Issue → PR）。線は左の余白を通る折れ線で、Issue ごとに通り道を分ける
-    const lanes = Math.min(10, Math.max(1, iss.length)), x0 = 10 + lanes * 6, cw = W - x0 - 2, NH = 78, G = 8;
-    const laneX = k => 4 + (k % lanes) * 6;
-    const yF = 2, yIs = 70, yI = k => yIs + 18 + k * (NH + G), yPs = yI(iss.length) + 6, yP = k => yPs + 18 + k * (NH + G);
-    H = yP(prs.length) + 4;
-    const on = (a, b) => !sel || (sel === a && active.has(b)) || (sel === b && active.has(a));
-    const path = (y1, y2, x, kind, hot) => { const [, c, da] = LK[kind]; return `<path d="M${x0} ${y1} H${x} V${y2} H${x0}" fill="none" stroke="${sel && hot && kind === 'ref' ? 'var(--ink)' : c}" stroke-width="${kind === 'parent' ? 3 : sel && hot ? 2.4 : 1.6}" stroke-dasharray="${da}" opacity="${sel && !hot ? .1 : .9}"/>`; };
-    lines += `<path d="M${x0} ${yF + 22} H2 V${yI(iss.length - 1) + 22}" fill="none" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="1 4"/>`;
-    iss.forEach((i, k) => { if (inC(i)) lines += `<path d="M2 ${yI(k) + 22} H${x0}" fill="none" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="1 4"/>`; });
-    prs.forEach((p, kp) => p.edges.forEach(e => { const ki = iss.findIndex(i => i.number === e.i); if (ki >= 0) lines += path(yI(ki) + 30 + (kp % 3) * 3, yP(kp) + 28, laneX(ki), e.kind, on('i' + e.i, 'p' + p.n)); }));
-    const seen = new Set();
-    iss.forEach((i, k) => i.links.forEach(l => { if (l.type !== 'issue') return; const k2 = iss.findIndex(x => x.number === l.n); const key = [i.number, l.n].sort().join('-'); if (k2 < 0 || seen.has(key)) return; seen.add(key);
-      lines += path(yI(k) + 40, yI(k2) + 40, laneX(Math.min(k, k2)) + 2, l.kind === 'ref' ? 'ref' : 'parent', on('i' + i.number, 'i' + l.n)); }));
-    const badge = kinds => [...new Set(kinds)].map(k => `<em style="font-style:normal;font-size:10.5px;padding:1px 6px;border-radius:5px;margin-right:4px;border:1px ${k === 'candidate' ? 'dashed' : 'solid'} ${LK[k === 'child' ? 'parent' : k][1]};color:var(--mute)">${LK[k === 'child' ? 'parent' : k][0]}</em>`).join('');
-    const card = (id, y, cls, head, right, title, kinds) => `<div class="wm-cn ${cls}${sel === id ? ' on' : ''}${dim(id) ? ' dim' : ''}" data-cn="${id}" role="button" tabindex="0" style="left:${x0}px;top:${y}px;width:${cw}px;height:${NH}px;font-size:13.5px;padding:5px 9px"><small style="display:flex;justify-content:space-between;gap:6px"><b>${head}</b><span>${right}</span></small><span style="font-weight:600;line-height:1.35">${esc(title)}</span><div style="margin-top:2px;white-space:nowrap;overflow:hidden">${kinds}</div></div>`;
-    nodes += `<div class="wm-cn f${dim('f') ? ' dim' : ''}" data-cn="f" role="button" tabindex="0" style="left:${x0}px;top:${yF}px;width:${cw}px;height:46px"><small>機能・${ST[f.state]}・開いている Issue ${all.filter(i => i.open).length}/${all.length}</small><span>${esc(f.name)}</span></div>`;
-    nodes += `<div class="sub" style="position:absolute;left:${x0}px;top:${yIs}px;font-weight:600">Issue（${iss.length}）</div><div class="sub" style="position:absolute;left:${x0}px;top:${yPs}px;font-weight:600">PR（${prs.length}）</div>`;
-    iss.forEach((i, k) => nodes += card('i' + i.number, yI(k), (i.open ? 'open' : '') + (i.stale ? ' stale' : '') + (inC(i) ? '' : ' other'), `Issue #${i.number}`, i.open ? (i.stale ? '古くなっている候補' : '開いている') : '閉じた ' + md(i.closed), i.title,
-      badge([...(inC(i) ? ['catalog'] : []), ...i.links.filter(l => l.type === 'issue' && l.kind !== 'ref').map(l => 'parent')])));
-    prs.forEach((p, k) => nodes += card('p' + p.n, yP(k), p.edges.length && p.edges.every(e => e.kind === 'candidate') ? 'other' : '', `PR #${p.n}`, 'マージ ' + md(p.day), p.title, p.edges.length ? badge(p.edges.map(e => e.kind)) : '<em style="font-style:normal;font-size:10.5px;color:var(--mute)">話題のタグ</em>'));
   }
   // 選んだものの中身（根拠）
   let det = '<p class="sub" style="margin-top:8px">四角を押すと、つながりの根拠が出ます。</p>';
-  if (sel && sel.startsWith('i')) { const i = d.issues.find(x => x.number === +sel.slice(1)); if (i) det = `<div class="wm-det" style="border-top:1px solid var(--ink);border-radius:10px;margin-top:8px"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">Issue #${i.number} ${esc(i.title)}</a><div>立てた ${md(i.created)}${i.closed ? '・閉じた ' + md(i.closed) : '・開いている'}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>${i.links.filter(l => s.cand || l.kind !== 'candidate').map(l => `<div class="wm-link"><span class="wm-kind${l.kind === 'candidate' ? ' k' : ''}">${LK[l.kind === 'child' ? 'parent' : l.kind][0]}${l.kind === 'child' ? '（先）' : l.kind === 'parent' ? '（元）' : ''}</span>${l.type === 'pr' ? 'PR' : 'Issue'} #${l.n} ${esc(l.title)}${l.evidence.map(e => `<div class="ev">根拠：${esc(e)}</div>`).join('')}</div>`).join('')}</div>`; }
-  if (sel && sel.startsWith('p')) { const p = prs.find(x => 'p' + x.n === sel); if (p) det = `<div class="wm-det" style="border-top:1px solid var(--ink);border-radius:10px;margin-top:8px"><a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">PR #${p.n} ${esc(p.title)}</a><div>マージ ${md(p.day)}</div>${p.edges.map(e => `<div class="wm-link"><span class="wm-kind${e.kind === 'candidate' ? ' k' : ''}">${LK[e.kind === 'child' ? 'parent' : e.kind][0]}</span>Issue #${e.i}${e.ev.map(x => `<div class="ev">根拠：${esc(x)}</div>`).join('')}</div>`).join('')}</div>`; }
-  s._sheet = W < 640 && sel ? det : null;
-  if (s._sheet) det = '';
-  return `<p class="sub" style="margin-top:8px">機能ごとに、その機能の Issue と、つながる PR を線で結びます。線の種類はつながりの種類です。破線の四角は、ほかの機能の Issue か、推測だけでつながる PR。</p>
-  <div class="wm-chips" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch">${per.map(x => `<button class="wm-chip" style="flex:none" data-cl="${esc(x.f.id)}" aria-pressed="${x.f.id === s.cl}">${esc(x.f.name.replace(/（.*）/, ''))} ${x.iss.filter(i => i.open).length}/${x.iss.length}</button>`).join('')}</div>
-  <div class="row" style="margin-top:8px"><button class="btn" data-cand="1" style="min-height:36px">${s.cand ? '推測を隠す' : '推測も出す'}</button><span class="sub">PR は新しい24件まで。四角を押すと根拠が出ます</span></div>
-  <div class="wm-lk">${Object.values(LK).map(([l, c, da]) => `<span><i style="border-top-color:${c};border-top-style:${da ? (da === '1 4' ? 'dotted' : 'dashed') : 'solid'}"></i>${l}</span>`).join('')}</div>
-  <div class="wm-cl" style="height:${H}px"><svg viewBox="0 0 ${W} ${H}" aria-hidden="true">${lines}</svg>${nodes}</div>${det}`;
+  const issueDet = i => `<div class="wm-det" style="border-top:1px solid var(--ink);border-radius:10px;margin-top:8px"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">Issue #${i.number} ${esc(i.title)}</a><div>立てた ${md(i.created)}${i.closed ? '・閉じた ' + md(i.closed) : '・開いている'}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>
+    <div class="row" style="margin-top:6px"><button class="btn" data-totl="${i.number}" style="min-height:36px">Issue の経過で見る</button></div><h4>つながり（${i.links.filter(l => s.cand || l.kind !== 'candidate').length}）</h4>${linkList(i, s)}</div>`;
+  if (sel && sel.startsWith('i')) { const i = d.issues.find(x => x.number === +sel.slice(1)); if (i) det = issueDet(i); }
+  if (sel && sel.startsWith('p')) { const p = prs.find(x => 'p' + x.n === sel); if (p) det = `<div class="wm-det" style="border-top:1px solid var(--ink);border-radius:10px;margin-top:8px"><a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">PR #${p.n} ${esc(p.title)}</a><div>マージ ${md(p.day)}</div>${p.edges.map(e => `<div class="wm-link"><span class="wm-kind${e.kind === 'candidate' ? ' k' : ''}">${LKOF(e.kind)[0]}</span>Issue #${e.i}${e.ev.map(x => `<div class="ev">根拠：${esc(x)}</div>`).join('')}</div>`).join('')}</div>`; }
+  s._sheet = null;
+  return `<p class="sub" style="margin-top:8px">${phone ? '機能や話題を選び、Issue を押すと、つながる PR・Issue と、つながりの種類・根拠が出ます。' : '機能ごとに、その機能の Issue と、つながる PR を線で結びます。線の種類はつながりの種類です。破線の四角は、ほかの機能の Issue か、推測だけでつながる PR。'}</p>
+  <div class="wm-chips" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch">${per.map(x => `<button class="wm-chip" style="flex:none" data-cl="${esc(x.f.id)}" aria-pressed="${x.f.id === s.cl}">${esc(x.f.name.replace(/（.*）/, ''))} ${x.f.topic && !x.iss.length ? `PR ${x.f.topic.prs.length}` : `${x.iss.filter(i => i.open).length}/${x.iss.length}`}</button>`).join('')}</div>
+  <div class="row" style="margin-top:8px"><button class="btn" data-cand="1" style="min-height:36px">${s.cand ? '推測を隠す' : '推測も出す'}</button><span class="sub">${phone ? 'Issue を押すと、つながる PR・Issue が全部出ます' : 'PR は新しい24件まで（選んだ Issue の PR は全部）。四角を押すと根拠が出ます'}</span></div>
+  ${phone ? '' : `<div class="wm-lk">${Object.values(LK).map(([l, c, da]) => `<span><i style="border-top-color:${c};border-top-style:${da ? (da === '1 4' ? 'dotted' : 'dashed') : 'solid'}"></i>${l}</span>`).join('')}</div>`}
+  ${phone ? phoneList() : `<div class="wm-cl" style="height:${H}px"><svg viewBox="0 0 ${W} ${H}" aria-hidden="true">${lines}</svg>${nodes}</div>${det}`}`;
+  // スマホ：Issue を起点に。Issue の一覧を出し、押すとその直下に、つながる PR・Issue を種類ごとに全部（根拠・リンクつき）
+  function phoneList() {
+    const kinds = i => [...new Set(i.links.filter(l => s.cand || l.kind !== 'candidate').map(l => KNAME[l.kind]))].join('・') || 'つながりなし';
+    const prOnly = f.topic ? f.topic.prs.filter(p => !iss.some(i => i.links.some(l => l.type === 'pr' && l.n === p.n))) : [];
+    return `<div class="wm-cn f" style="position:static;width:auto;height:auto;margin-top:8px"><small>${f.topic ? '話題' : '機能・' + ST[f.state]}・Issue ${all.filter(i => i.open).length}/${all.length}（開いている/全部）</small><span>${esc(f.name)}</span></div>
+    ${iss.map(i => { const on = selI === i.number; return `<div class="wm-row${on ? ' on' : ''}" data-cn="i${i.number}" role="button" tabindex="0" aria-expanded="${on}" style="display:block;margin-top:6px;border-color:${on ? 'var(--ink)' : 'var(--line)'};border-left:4px solid ${i.open ? (i.stale ? 'var(--warn)' : '#2fae69') : 'var(--line)'}">
+      <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--mute)"><b>Issue #${i.number}</b><span>${i.open ? (i.stale ? '古くなっている候補' : '開いている') : '閉じた ' + md(i.closed)}</span></div>
+      <div style="font-size:14px;font-weight:600;line-height:1.4">${esc(i.title)}</div><div class="sub" style="font-size:12px">${i.links.length}件：${esc(kinds(i))}</div></div>${on ? issueDet(i).replace('border-top:1px solid var(--ink);border-radius:10px;margin-top:8px', 'margin-top:0') : ''}`; }).join('')}
+    ${prOnly.length ? `<h3>このタグを付けた PR（Issue につながらないもの）</h3><ul style="font-size:13.5px;padding-left:1.2em">${prOnly.map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">PR #${p.n}</a> ${md(p.day)} ${esc(p.t)}</li>`).join('')}</ul>` : ''}`;
+  }
 }
 
 function draw() {
@@ -271,7 +274,7 @@ function draw() {
   ${d.unmatched.length ? `<ul style="font-size:14px;padding-left:1.2em">${d.unmatched.slice(0, 30).map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.n}</a> ${md(p.day)} ${esc(p.t)}</li>`).join('')}</ul>` : '<p class="sub">なし</p>'}
   <h3>データの流れ</h3><p class="sub">左はデータ、右は機能。赤い破線は、貯めているのにどの画面も使っていないデータ。押すと、つながる先が光ります。</p>
   ${nodeNote}<div class="fig" style="margin-top:8px">${flow(d, s)}</div>
-  <p class="sub" style="margin-top:8px">取り込み：PR ${d.sync?.pr_done ? 'すべて' : '途中まで'}・最後に読んだ ${d.sync?.prs_at ? md(d.sync.prs_at.slice(0, 10)) + ' ' + d.sync.prs_at.slice(11, 16) + '（UTC）' : 'まだ'}</p></div>`;
+  <p class="sub" style="margin-top:8px">取り込み：Issue ${d.issues.length}件${d.sync?.issues_more ? '（1000件で止めた。続きあり）' : '（すべて）'}・PR ${d.sync?.pr_done ? 'すべて' : '途中まで'}・最後に読んだ ${d.sync?.prs_at ? md(d.sync.prs_at.slice(0, 10)) + ' ' + d.sync.prs_at.slice(11, 16) + '（UTC）' : 'まだ'}</p></div>`;
 }
 
 // スマホでは、選んだものの根拠を画面の下から出す（下までスクロールしなくてよい）
@@ -307,6 +310,7 @@ function bind(el) {
     const sp = t.closest('[data-span]'); if (sp) { s.span = +sp.dataset.span; hideDay(); load(REPO).then(draw).catch(err => { s.note = err.message; draw(); }); return; }
     const vw = t.closest('[data-view]'); if (vw) { s.view = vw.dataset.view; hideDay(); draw(); return; }
     const ifl = t.closest('[data-ifilt]'); if (ifl) { s.ifilt = ifl.dataset.ifilt; draw(); return; }
+    const tt = t.closest('[data-totl]'); if (tt) { s.view = 'issue'; s.isel = +tt.dataset.totl; s.ifocus = +tt.dataset.totl; s.ifilt = 'all'; draw(); EL.querySelector(`.wm-tl[data-i="${s.isel}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     const cl = t.closest('[data-cl]'); if (cl) { s.cl = cl.dataset.cl; s.csel = null; draw(); return; }
     if (t.closest('[data-cand]')) { s.cand = !s.cand; draw(); return; }
     const cn = t.closest('[data-cn]'); if (cn) { s.csel = cn.dataset.cn === 'f' || s.csel === cn.dataset.cn ? null : cn.dataset.cn; draw(); return; }

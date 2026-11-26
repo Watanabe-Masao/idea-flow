@@ -65,7 +65,9 @@ export function checkPr(cat: Catalog, pr: { title: string; body: string; files: 
   }
   out.push(...checkTags(cat, pr.body, topicsKnown));
   const rep = parseReport(pr.body);
-  out.push({ ok: !!rep, what: '申告の3つの見出し（確かめた決まり／決まりになく、自分で判断した所／足りなかった決まり）', fix: '説明の最後に「## 確かめた決まり」「## 決まりになく、自分で判断した所」「## 足りなかった決まり」。無いときは「- なし」' });
+  const LBL = { read: '確かめた決まり', own: '決まりになく、自分で判断した所', lack: '足りなかった決まり' } as const;
+  const lacking = (Object.keys(LBL) as (keyof typeof LBL)[]).filter(k => !rep?.found.includes(k)).map(k => LBL[k]);
+  out.push({ ok: !!rep?.complete, what: `申告の3つの見出し${lacking.length && rep ? `（無い：${lacking.join('・')}）` : ''}`, fix: '説明の最後に「## 確かめた決まり」「## 決まりになく、自分で判断した所」「## 足りなかった決まり」。無いときは「- なし」' });
   return out;
 }
 
