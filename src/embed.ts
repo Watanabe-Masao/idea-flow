@@ -24,20 +24,8 @@ export async function embedMany(env: Env, texts: string[]): Promise<Vec[]> {
   return out;
 }
 
-export type EmbedKind = 'issue' | 'commit' | 'rule';
+export type EmbedKind = 'rule'; // 以前はタスク管理の issue・commit もあった（表には残っている）
 export type Item = { kind: EmbedKind; ref: string; text: string };
-
-/** 文が変わったものだけ埋め込みを作り直す */
-export async function refreshEmbeddings(env: Env): Promise<{ embedded: number; skipped: number }> {
-  const issues = await env.DB.prepare('SELECT id, title, description FROM issues').all<{ id: string; title: string; description: string | null }>();
-  const commits = await env.DB.prepare('SELECT sha, message, body FROM commits WHERE is_merge = 0').all<{ sha: string; message: string; body: string }>();
-  const items: Item[] = [
-    ...issues.results.map(i => ({ kind: 'issue' as const, ref: i.id, text: embedText(i.title.replace(/^#\d+\s*/, ''), i.description?.slice(0, 300)) })),
-    ...commits.results.map(c => ({ kind: 'commit' as const, ref: c.sha, text: embedText(c.message, c.body.split('\n').slice(0, 3).join(' ')) })),
-  ];
-  const embedded = await upsertEmbeddings(env, items);
-  return { embedded, skipped: items.length - embedded };
-}
 
 /** 文が変わったものだけ埋め込みを作り直して保存する。作った件数を返す */
 export async function upsertEmbeddings(env: Env, items: Item[]): Promise<number> {
