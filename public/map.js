@@ -151,16 +151,20 @@ function issueView(d, s) {
 // クラスター：機能ごとに、その機能の Issue（左）と、つながる PR（右）を線で。線の種類＝つながりの種類
 const LK = { closes: ['これで閉じた', '#2fae69', ''], ref: ['番号で参照', 'var(--mute)', ''], parent: ['引き継ぎ', '#5b7fd6', ''], candidate: ['推測（候補）', '#9a6fc0', '5 4'], catalog: ['機能の割り当て', 'var(--line)', '1 4'] };
 function clusterView(d, s) {
-  const per = d.features.map(f => ({ f, iss: d.issues.filter(i => i.features.includes(f.id)) })).filter(x => x.iss.length)
+  const per = d.features.map(f => ({ f, iss: d.issues.filter(i => inC(i)) })).filter(x => x.iss.length)
     .sort((a, b) => b.iss.filter(i => i.open).length - a.iss.filter(i => i.open).length || b.iss.length - a.iss.length);
+  // 話題（機能ではないタグ）も入り口にする。id は「t:話題」。その話題の Issue と、その話題を付けた PR
+  for (const t of d.topics || []) per.push({ f: { id: 't:' + t.name, name: '話題：' + t.name, state: 1, topic: t }, iss: d.issues.filter(i => (i.topics || []).includes(t.name)) });
   if (!per.length) return '<p class="sub" style="margin-top:8px">機能につながる Issue がまだありません。</p>';
   if (!s.cl || !per.some(x => x.f.id === s.cl)) s.cl = per[0].f.id;
   const { f, iss: all } = per.find(x => x.f.id === s.cl);
+  const inC = i => f.topic ? (i.topics || []).includes(f.topic.name) : i.features.includes(f.id);
   // Issue：開いているものすべてと、閉じたものの新しい8件まで。引き継ぎでつながる、ほかの機能の Issue も入れる
   let iss = [...all.filter(i => i.open), ...all.filter(i => !i.open).slice(0, 8)];
   for (const i of [...iss]) for (const l of i.links) if (l.type === 'issue' && (l.kind === 'parent' || l.kind === 'child') && !iss.some(x => x.number === l.n)) { const j = d.issues.find(x => x.number === l.n); if (j) iss.push(j); }
   iss.sort((a, b) => a.created.localeCompare(b.created) || a.number - b.number);
   const prMap = new Map();
+  if (f.topic) for (const p of f.topic.prs) prMap.set(p.n, { n: p.n, title: p.t, day: p.day, url: p.url, kind: 'ref', type: 'pr', edges: [] });
   for (const i of iss) for (const l of i.links) if (l.type === 'pr' && (s.cand || l.kind !== 'candidate')) { const p = prMap.get(l.n) || { ...l, edges: [] }; p.edges.push({ i: i.number, kind: l.kind, ev: l.evidence }); prMap.set(l.n, p); }
   const prs = [...prMap.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-24);
   const W = Math.max(300, (EL.clientWidth || 360) - 4);
@@ -179,7 +183,7 @@ function clusterView(d, s) {
   const ln = (x1, y1, x2, y2, kind, on) => { const [, c, da] = LK[kind]; const mx = (x1 + x2) / 2; return `<path d="M${x1} ${y1} C${mx} ${y1},${mx} ${y2},${x2} ${y2}" fill="none" stroke="${sel && on && kind === 'ref' ? 'var(--ink)' : c}" stroke-width="${sel && on ? 2.6 : 1.4}" stroke-dasharray="${da}" opacity="${sel && !on ? .1 : .85}"/>`; };
   // 機能 → Issue（左の柱）
   lines += `<path d="M${lx - 6} 40 V${yI(iss.length - 1) + NH / 2}" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="1 4" fill="none"/>`;
-  iss.forEach((i, k) => { if (i.features.includes(f.id)) lines += `<path d="M${lx - 6} ${yI(k) + NH / 2} H${lx}" stroke="var(--line)" stroke-width="1.4" fill="none"/>`; });
+  iss.forEach((i, k) => { if (inC(i)) lines += `<path d="M${lx - 6} ${yI(k) + NH / 2} H${lx}" stroke="var(--line)" stroke-width="1.4" fill="none"/>`; });
   // Issue → PR
   prs.forEach((p, kp) => p.edges.forEach(e => { const ki = iss.findIndex(i => i.number === e.i); if (ki >= 0) lines += ln(lx + colW, yI(ki) + NH / 2, rx, yP(kp) + NH / 2, e.kind, !sel || (active.has('i' + e.i) && active.has('p' + p.n) && (sel === 'i' + e.i || sel === 'p' + p.n))); }));
   // Issue ↔ Issue（引き継ぎ・参照）：左の外側を回る弧
@@ -189,7 +193,7 @@ function clusterView(d, s) {
     lines += `<path d="M${lx + 10} ${y1} C${lx - 12} ${y1},${lx - 12} ${y2},${lx + 10} ${y2}" fill="none" stroke="${c}" stroke-width="${kind === 'parent' ? 3 : 1.4}" opacity="${sel && !on ? .12 : .9}"/>`; }));
   const node = (id, x, y, w, h, cls, sub, txt) => `<div class="wm-cn ${cls}${sel === id ? ' on' : ''}${dim(id) ? ' dim' : ''}" data-cn="${id}" role="button" tabindex="0" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px"><small>${sub}</small><span>${esc(txt)}</span></div>`;
   nodes = node('f', lx, 4, W - lx - 6, 36, 'f', `機能・${ST[f.state]}・開いている Issue ${all.filter(i => i.open).length}`, f.name);
-  iss.forEach((i, k) => nodes += node('i' + i.number, lx, yI(k), colW, NH, (i.open ? 'open' : '') + (i.stale ? ' stale' : '') + (i.features.includes(f.id) ? '' : ' other'), `Issue #${i.number}・${i.open ? '開いている' : '閉じた ' + md(i.closed)}`, i.title));
+  iss.forEach((i, k) => nodes += node('i' + i.number, lx, yI(k), colW, NH, (i.open ? 'open' : '') + (i.stale ? ' stale' : '') + (inC(i) ? '' : ' other'), `Issue #${i.number}・${i.open ? '開いている' : '閉じた ' + md(i.closed)}`, i.title));
   prs.forEach((p, k) => nodes += node('p' + p.n, rx, yP(k), colW, NH, p.edges.every(e => e.kind === 'candidate') ? 'other' : '', `PR #${p.n}・${md(p.day)}`, p.title));
   } else {
     // スマホ：縦に1列（機能 → Issue → PR）。線は左の余白を通る折れ線で、Issue ごとに通り道を分ける
@@ -200,7 +204,7 @@ function clusterView(d, s) {
     const on = (a, b) => !sel || (sel === a && active.has(b)) || (sel === b && active.has(a));
     const path = (y1, y2, x, kind, hot) => { const [, c, da] = LK[kind]; return `<path d="M${x0} ${y1} H${x} V${y2} H${x0}" fill="none" stroke="${sel && hot && kind === 'ref' ? 'var(--ink)' : c}" stroke-width="${kind === 'parent' ? 3 : sel && hot ? 2.4 : 1.6}" stroke-dasharray="${da}" opacity="${sel && !hot ? .1 : .9}"/>`; };
     lines += `<path d="M${x0} ${yF + 22} H2 V${yI(iss.length - 1) + 22}" fill="none" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="1 4"/>`;
-    iss.forEach((i, k) => { if (i.features.includes(f.id)) lines += `<path d="M2 ${yI(k) + 22} H${x0}" fill="none" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="1 4"/>`; });
+    iss.forEach((i, k) => { if (inC(i)) lines += `<path d="M2 ${yI(k) + 22} H${x0}" fill="none" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="1 4"/>`; });
     prs.forEach((p, kp) => p.edges.forEach(e => { const ki = iss.findIndex(i => i.number === e.i); if (ki >= 0) lines += path(yI(ki) + 30 + (kp % 3) * 3, yP(kp) + 28, laneX(ki), e.kind, on('i' + e.i, 'p' + p.n)); }));
     const seen = new Set();
     iss.forEach((i, k) => i.links.forEach(l => { if (l.type !== 'issue') return; const k2 = iss.findIndex(x => x.number === l.n); const key = [i.number, l.n].sort().join('-'); if (k2 < 0 || seen.has(key)) return; seen.add(key);
@@ -209,9 +213,9 @@ function clusterView(d, s) {
     const card = (id, y, cls, head, right, title, kinds) => `<div class="wm-cn ${cls}${sel === id ? ' on' : ''}${dim(id) ? ' dim' : ''}" data-cn="${id}" role="button" tabindex="0" style="left:${x0}px;top:${y}px;width:${cw}px;height:${NH}px;font-size:13.5px;padding:5px 9px"><small style="display:flex;justify-content:space-between;gap:6px"><b>${head}</b><span>${right}</span></small><span style="font-weight:600;line-height:1.35">${esc(title)}</span><div style="margin-top:2px;white-space:nowrap;overflow:hidden">${kinds}</div></div>`;
     nodes += `<div class="wm-cn f${dim('f') ? ' dim' : ''}" data-cn="f" role="button" tabindex="0" style="left:${x0}px;top:${yF}px;width:${cw}px;height:46px"><small>機能・${ST[f.state]}・開いている Issue ${all.filter(i => i.open).length}/${all.length}</small><span>${esc(f.name)}</span></div>`;
     nodes += `<div class="sub" style="position:absolute;left:${x0}px;top:${yIs}px;font-weight:600">Issue（${iss.length}）</div><div class="sub" style="position:absolute;left:${x0}px;top:${yPs}px;font-weight:600">PR（${prs.length}）</div>`;
-    iss.forEach((i, k) => nodes += card('i' + i.number, yI(k), (i.open ? 'open' : '') + (i.stale ? ' stale' : '') + (i.features.includes(f.id) ? '' : ' other'), `Issue #${i.number}`, i.open ? (i.stale ? '古くなっている候補' : '開いている') : '閉じた ' + md(i.closed), i.title,
-      badge([...(i.features.includes(f.id) ? ['catalog'] : []), ...i.links.filter(l => l.type === 'issue' && l.kind !== 'ref').map(l => 'parent')])));
-    prs.forEach((p, k) => nodes += card('p' + p.n, yP(k), p.edges.every(e => e.kind === 'candidate') ? 'other' : '', `PR #${p.n}`, 'マージ ' + md(p.day), p.title, badge(p.edges.map(e => e.kind))));
+    iss.forEach((i, k) => nodes += card('i' + i.number, yI(k), (i.open ? 'open' : '') + (i.stale ? ' stale' : '') + (inC(i) ? '' : ' other'), `Issue #${i.number}`, i.open ? (i.stale ? '古くなっている候補' : '開いている') : '閉じた ' + md(i.closed), i.title,
+      badge([...(inC(i) ? ['catalog'] : []), ...i.links.filter(l => l.type === 'issue' && l.kind !== 'ref').map(l => 'parent')])));
+    prs.forEach((p, k) => nodes += card('p' + p.n, yP(k), p.edges.length && p.edges.every(e => e.kind === 'candidate') ? 'other' : '', `PR #${p.n}`, 'マージ ' + md(p.day), p.title, p.edges.length ? badge(p.edges.map(e => e.kind)) : '<em style="font-style:normal;font-size:10.5px;color:var(--mute)">話題のタグ</em>'));
   }
   // 選んだものの中身（根拠）
   let det = '<p class="sub" style="margin-top:8px">四角を押すと、つながりの根拠が出ます。</p>';

@@ -31,7 +31,26 @@ export function featuresOfFiles(cat: Catalog, files: string[]) {
  * Issue を機能とデータに結び付ける。強い順に：
  * 本文の「機能：」の行 → 人が結び付けたもの → 題の頭（「満月の物語：…」）→ 題の言葉
  */
+/** 本文の「タグ：コールドムーン、絵本」を読む（@ や # は付けても付けなくてもよい） */
+export function tagsOf(body: string): string[] {
+  const m = body.match(/^\s*(?:[-*]\s*)?\**タグ\**\s*[:：]\s*(.+)$/m);
+  if (!m) return [];
+  return [...new Set(m[1].split(/[、,，\s]+/).map(w => w.replace(/^[@＠#＃]/, '').trim()).filter(w => w && !/^\d+$/.test(w)))];
+}
+/** タグを機能と話題に分ける（機能の名前・別名・id と同じなら機能、それ以外は話題） */
+export function splitTags(cat: Catalog, tags: string[]) {
+  const fid = (w: string) => cat.features.find(f => f.id === w || f.name === w || f.name.replace(/（.*）/, '') === w || f.aliases.includes(w))?.id;
+  const features: string[] = [], topics: string[] = [];
+  for (const t of tags) { const id = fid(t); if (id) { if (!features.includes(id)) features.push(id); } else topics.push(t); }
+  return { features, topics };
+}
+
 export function linkIssue(cat: Catalog, i: { number: number; title: string; body: string }): { features: string[]; nodes: string[]; how: string } {
+  // タグの機能は、ほかの決め方に足す（複数の入り口）
+  const base = linkIssueBase(cat, i), extra = splitTags(cat, tagsOf(i.body)).features.filter(id => !base.features.includes(id));
+  return extra.length ? { ...base, features: [...base.features, ...extra], how: base.how ? `${base.how}＋タグ` : '本文の「タグ：」' } : base;
+}
+function linkIssueBase(cat: Catalog, i: { number: number; title: string; body: string }): { features: string[]; nodes: string[]; how: string } {
   const byName = (w: string) => cat.features.find(f => f.id === w || f.name === w || f.aliases.includes(w))?.id;
   const line = i.body.match(/^\s*(?:[-*]\s*)?\**機能\**\s*[:：]\s*(.+)$/m);
   if (line) {
@@ -219,7 +238,8 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   const days = Array.from({ length: span }, (_, k) => addDays(today, k - span + 1));
   const prs: Pr[] = (await env.DB.prepare('SELECT number, title, url, merged_at, files, body, closes FROM pr_activity WHERE repo = ? ORDER BY merged_at DESC').bind(repo).all<Record<string, unknown>>()).results
     .map(r => ({ ...r, files: JSON.parse(String(r.files)), closes: JSON.parse(String(r.closes ?? '[]')) }) as Pr);
-  const of = new Map(prs.map(p => [p.number, featuresOfFiles(cat, p.files)]));
+  const of = new Map(prs.map(p => { const byFile = featuresOfFiles(cat, p.files), byTag = splitTags(cat, tagsOf(p.body)).features; return [p.number, [...new Set([...byFile.filter(id => !(byTag.length && cat.features.find(f => f.id === id)?.fallback)), ...byTag])]]; }));
+  const prTopics = new Map(prs.map(p => [p.number, splitTags(cat, tagsOf(p.body)).topics]));
   const idx = new Map(days.map((d, k) => [d, k]));
   const features = cat.features.map(f => {
     const mine = prs.filter(p => of.get(p.number)!.includes(f.id));
@@ -240,14 +260,21 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   const issues = linked.map(({ i, l }) => {
     const fs = l.features.filter(id => stOf.has(id));
     const stale = !!i.open && fs.length > 0 && fs.every(id => stOf.get(id) === 2) && jstDay(i.updated) < old;
-    return { number: i.number, open: !!i.open, title: i.title, created: jstDay(i.created), updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale, links: links.get(i.number) ?? [] };
+    return { number: i.number, open: !!i.open, title: i.title, created: jstDay(i.created), updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale, links: links.get(i.number) ?? [], topics: splitTags(cat, tagsOf(i.body)).topics };
   });
   const inSpan = prs.filter(p => idx.has(jstDay(p.merged_at)));
   const writing = writingCheck(cat, inSpan, rows.filter(i => idx.has(jstDay(i.created))), links);
   const unmatched = inSpan.filter(p => !of.get(p.number)!.length).map(p => ({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url, files: p.files.slice(0, 8) }));
   // 申告の「足りなかった決まり」（週の見直しで、決まりに足すか・一回限りかを分ける材料）
   const lacks = inSpan.flatMap(p => (parseReport(p.body)?.lack ?? []).map(t => ({ n: p.number, day: jstDay(p.merged_at), t })));
-  return { repo, catalog: true as const, sync, today, days, features, nodes: cat.nodes, issues, unmatched, lacks, writing,
+  // 話題（機能ではないタグ）：Issue と PR を束ねる、軽い入り口。最初に出た日が新しいものは、見直しで扱う
+  const tp = new Map<string, { name: string; issues: number[]; prs: { n: number; t: string; day: string; url: string }[]; first: string; last: string }>();
+  const touch = (t: string, day: string) => { const x = tp.get(t) ?? { name: t, issues: [], prs: [], first: day, last: day }; if (day < x.first) x.first = day; if (day > x.last) x.last = day; tp.set(t, x); return x; };
+  for (const i of issues) for (const t of i.topics) touch(t, i.created).issues.push(i.number);
+  for (const p of prs) for (const t of prTopics.get(p.number) ?? []) touch(t, jstDay(p.merged_at)).prs.push({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url });
+  const topics = [...tp.values()].sort((a, b) => b.last.localeCompare(a.last));
+  const prTopicList = Object.fromEntries([...prTopics].filter(([, t]) => t.length));
+  return { repo, catalog: true as const, topics, prTopics: prTopicList, sync, today, days, features, nodes: cat.nodes, issues, unmatched, lacks, writing,
     counts: { prs: inSpan.length, building: features.filter(f => f.state === 0).length, settled: features.filter(f => f.state === 1).length, stopped: features.filter(f => f.state === 2).length,
       openIssues: issues.filter(i => i.open).length, stale: issues.filter(i => i.stale).length, unused: Object.values(cat.nodes).filter(nd => nd.note === '画面なし').length } };
 }

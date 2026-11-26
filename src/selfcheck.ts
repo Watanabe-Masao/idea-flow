@@ -2,7 +2,7 @@
 // 書き方の決まりを守れているかを自分で確かめられるようにする。判断はせず、✓／✗ と直し方だけを返す。
 import type { Env } from './types.ts';
 import { gh } from './gh.ts';
-import { catalogOf, featuresOfFiles, linkIssue, parseReport, refLines, type Catalog } from './workmap.ts';
+import { catalogOf, featuresOfFiles, linkIssue, parseReport, refLines, splitTags, tagsOf, type Catalog } from './workmap.ts';
 
 /** 書き方の決まり（CLAUDE.md・docs/operation.md と同じ中身。CLAUDE.md を読まない AI にも渡すため） */
 export const WRITING_RULES = `書き方の決まり（地図を働かせるため）
@@ -12,10 +12,11 @@ export const WRITING_RULES = `書き方の決まり（地図を働かせるた�
 4. PR の説明の最後に、申告の3つの見出しをこの名前のまま：「## 確かめた決まり」「## 決まりになく、自分で判断した所」「## 足りなかった決まり」（無いときは「- なし」）。
 5. Issue の題：「機能名：何をするか」。本文の最初に「機能：〇〇」「閉じる条件：〇〇」を1行ずつ。
 6. やり残しは新しい Issue にせず、その機能の「残り」の Issue に足す。分けるときは「#n の続き」。
-7. 新しい機能を作ったら、idea-flow の src/catalogs.ts に足す（同じ PR でよい）。
-8. 出す前に check（下書き）、出したあとに check（番号）で自己チェックし、✗ を直す。
-9. その日の最初の作業の前に review（毎日の見直し）を読み、自分の書き方の足りないものは直す。人に決めてもらうものは案を添えて伝える。
-10. マージのあと、本番に出たかを確かめる。決めるのは人。人の OK なしに閉じたり消したりしない。`;
+7. 入り口を増やしたいときは、本文に「タグ：コールドムーン、絵本」を1行（3つまで。@ は付けなくてよい）。機能の名前・別名のタグはその機能に、それ以外は「話題」として束ねる。新しい話題を作る前に、既にあるタグを使えないか確かめる。
+8. 新しい機能を作ったら、idea-flow の src/catalogs.ts に足す（同じ PR でよい）。
+9. 出す前に check（下書き）、出したあとに check（番号）で自己チェックし、✗ を直す。
+10. その日の最初の作業の前に review（毎日の見直し）を読み、自分の書き方の足りないものは直す。人に決めてもらうものは案を添えて伝える。
+11. マージのあと、本番に出たかを確かめる。決めるのは人。人の OK なしに閉じたり消したりしない。`;
 
 type Item = { ok: boolean | null; what: string; fix?: string };
 const show = (xs: Item[]) => xs.map(x => `${x.ok === true ? '✓' : x.ok === false ? '✗' : '・'} ${x.what}${x.ok === false && x.fix ? `\n    直し方：${x.fix}` : ''}`).join('\n');
@@ -28,8 +29,22 @@ function featureOfTitle(cat: Catalog, title: string) {
 }
 const names = (cat: Catalog) => cat.features.map(f => `${f.name.replace(/（.*）/, '')}${f.aliases.length ? `（別名：${f.aliases.slice(0, 3).join('・')}）` : ''}`).join('、');
 
+/** 本文の「タグ：」：3つまで／新しい話題なら、似た既存のタグ・機能名を知らせる */
+function checkTags(cat: Catalog, body: string, known: Set<string>): Item[] {
+  const tags = tagsOf(body);
+  if (!tags.length) return [];
+  const out: Item[] = [{ ok: tags.length <= 3, what: `タグ ${tags.length}つ（${tags.join('、')}）`, fix: 'タグは3つまで。いちばん近い入り口に絞る' }];
+  const { topics } = splitTags(cat, tags);
+  const pool = [...known, ...cat.features.flatMap(f => [f.name.replace(/（.*）/, ''), ...f.aliases])];
+  for (const t of topics.filter(t => !known.has(t))) {
+    const like = [...new Set(pool.filter(k => k !== t && (k.includes(t) || t.includes(k))))].slice(0, 3);
+    out.push({ ok: null, what: `「${t}」は新しい話題${like.length ? `。既にある「${like.join('」「')}」のことなら、そちらを使う` : '（毎日の見直しで、機能に上げるか・別名にまとめるか・話題のままかを人が決める）'}` });
+  }
+  return out;
+}
+
 /** PR の下書き（または出した PR）を確かめる */
-export function checkPr(cat: Catalog, pr: { title: string; body: string; files: string[] }, issues: Map<number, { open: boolean; title: string }>) {
+export function checkPr(cat: Catalog, pr: { title: string; body: string; files: string[] }, issues: Map<number, { open: boolean; title: string }>, topicsKnown = new Set<string>()) {
   const out: Item[] = [];
   const { head, f } = featureOfTitle(cat, pr.title);
   out.push({ ok: !!f, what: `題の頭が機能名${f ? `（${f.name}）` : head ? `（「${head}」は一覧に無い）` : '（「機能名：」が無い）'}`, fix: `題を「機能名：何をしたか」に。使える機能名：${names(cat)}` });
@@ -48,13 +63,14 @@ export function checkPr(cat: Catalog, pr: { title: string; body: string; files: 
     const i = issues.get(Number(m[1]));
     if (i && !i.open) out.push({ ok: false, what: `Closes #${m[1]} は、もう閉じている Issue`, fix: '「関連 #n」にするか、正しい番号に' });
   }
+  out.push(...checkTags(cat, pr.body, topicsKnown));
   const rep = parseReport(pr.body);
   out.push({ ok: !!rep, what: '申告の3つの見出し（確かめた決まり／決まりになく、自分で判断した所／足りなかった決まり）', fix: '説明の最後に「## 確かめた決まり」「## 決まりになく、自分で判断した所」「## 足りなかった決まり」。無いときは「- なし」' });
   return out;
 }
 
 /** Issue の下書き（または立てた Issue）を確かめる */
-export function checkIssue(cat: Catalog, is: { number?: number; title: string; body: string }, open: { number: number; title: string; features: string[] }[]) {
+export function checkIssue(cat: Catalog, is: { number?: number; title: string; body: string }, open: { number: number; title: string; features: string[] }[], known = new Set<string>()) {
   const out: Item[] = [];
   const { head, f } = featureOfTitle(cat, is.title);
   out.push({ ok: !!f, what: `題の頭が機能名${f ? `（${f.name}）` : head ? `（「${head}」は一覧に無い）` : ''}`, fix: `題を「機能名：何をするか」に。使える機能名：${names(cat)}` });
@@ -64,6 +80,7 @@ export function checkIssue(cat: Catalog, is: { number?: number; title: string; b
   out.push({ ok: fOk, what: `本文に「機能：」${fv ? `（${fv}）` : ''}`, fix: fl ? `「機能：」の中身が一覧の名前と合わない。使える機能名：${names(cat)}` : '本文の最初に「機能：〇〇」' });
   const cl = is.body.match(/閉じる条件\s*[:：]\s*(.*)$/m);
   out.push({ ok: !!cl && cl[1].trim().length >= 4, what: `本文に「閉じる条件：」${cl?.[1].trim() ? `（${cl[1].trim().slice(0, 40)}）` : ''}`, fix: '「閉じる条件：〇〇」を1行で（これができたら閉じる、と分かる文に）' });
+  out.push(...checkTags(cat, is.body, known));
   if (f) {
     const same = open.filter(o => o.number !== is.number && o.features.includes(f.id));
     if (same.length) out.push({ ok: null, what: `同じ機能の開いた Issue がある：${same.slice(0, 4).map(o => `#${o.number} ${o.title}`).join('／')}。やり残しなら、新しく立てずにそちらに足す（決まり6）` });
@@ -77,6 +94,9 @@ export async function selfCheck(env: Env, repo: string, a: Record<string, unknow
   if (!cat) throw new Error(`${repo} には機能の一覧（カタログ）がありません`);
   const rows = (await env.DB.prepare('SELECT number, open, title, body FROM map_issues WHERE repo = ?').bind(repo).all<{ number: number; open: number; title: string; body: string }>()).results;
   const issues = new Map(rows.map(r => [r.number, { open: !!r.open, title: r.title }]));
+  // 既にある話題：Issue と PR の本文のタグ（機能でないもの）
+  const prBodies = (await env.DB.prepare('SELECT body FROM pr_activity WHERE repo = ?').bind(repo).all<{ body: string }>()).results;
+  const known = new Set([...rows, ...prBodies].flatMap(r => splitTags(cat, tagsOf(r.body)).topics));
   const kind = a.pr != null ? 'pr' : a.issue != null ? 'issue' : String(a.kind ?? (a.files ? 'pr' : ''));
   let head = '', items: Item[];
   if (kind === 'pr') {
@@ -88,7 +108,7 @@ export async function selfCheck(env: Env, repo: string, a: Record<string, unknow
       pr = { title: p.title, body: p.body ?? '', files: fs.map(x => x.filename) };
       head = `PR #${n}「${p.title}」（${p.merged_at ? 'マージ済み' : p.state === 'open' ? '開いている' : '閉じた'}）`;
     } else head = `PR の下書き「${pr.title}」`;
-    items = checkPr(cat, pr, issues);
+    items = checkPr(cat, pr, issues, known);
   } else if (kind === 'issue') {
     let is: { number?: number; title: string; body: string } = { title: String(a.title ?? ''), body: String(a.body ?? '') };
     if (a.issue != null) {
@@ -98,7 +118,7 @@ export async function selfCheck(env: Env, repo: string, a: Record<string, unknow
       head = `Issue #${n}「${i.title}」（${i.state === 'open' ? '開いている' : '閉じた'}）`;
     } else head = `Issue の下書き「${is.title}」`;
     const open = rows.filter(r => r.open).map(r => ({ number: r.number, title: r.title, features: linkIssue(cat, r).features }));
-    items = checkIssue(cat, is, open);
+    items = checkIssue(cat, is, open, known);
   } else throw new Error('pr か issue の番号、または kind（pr／issue）と title・body（・files）を渡してください');
   const bad = items.filter(x => x.ok === false).length;
   return `■ 自己チェック：${head}\n${show(items)}\n\n${bad ? `✗ が ${bad} 件。直してから出してください（出したあとなら、題・説明を編集してください）。` : 'すべて守れています。'}`;

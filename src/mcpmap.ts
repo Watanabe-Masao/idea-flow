@@ -69,6 +69,7 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
       ...w.misses.slice(0, 8).map(m => `- ${m.type === 'pr' ? 'PR' : 'Issue'} #${m.n} ${m.t}：足りない ${m.miss.join('・')}`));
     const stale = d.issues.filter(i => i.stale);
     if (stale.length) L.push('', '■ 古くなっている候補（つながる機能がすべて止まっていて、7日以上動いていない）', ...stale.map(i => '- ' + issueLine(d, i)));
+    if (d.topics.length) L.push('', `■ 話題（タグ）${d.topics.length}：${d.topics.slice(0, 15).map(t => `${t.name}（${t.issues.length + t.prs.length}）`).join('、')}`);
     if (d.unmatched.length) L.push('', `■ どの機能にも当たらない作業（カタログに機能を足すかの材料）`, ...d.unmatched.slice(0, 10).map(p => `- #${p.n} ${md(p.day)} ${p.t}`));
     L.push('', '機能の中身は action="feature"（args: id）、Issue の周辺は action="issue"（args: n）。');
     return L.join('\n');
@@ -76,7 +77,13 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
   if (action === 'feature') {
     const q = String(a.id ?? a.name ?? '').trim();
     const f = d.features.find(x => x.id === q || x.name === q || x.name.startsWith(q));
-    if (!f) throw new Error(`機能「${q}」はありません。action="map" で id を確かめてください`);
+    const tp = !f ? d.topics.find(t => t.name === q.replace(/^[@＠#＃]/, '')) : null;
+    if (tp) {
+      const iss = d.issues.filter(i => i.topics.includes(tp.name));
+      return [`■ 話題「${tp.name}」（タグ。最初 ${md(tp.first)}・最後 ${md(tp.last)}）`, '', `■ Issue（${iss.length}）`, ...iss.map(i => '- ' + issueLine(d, i)),
+        '', `■ このタグを付けた PR（${tp.prs.length}）`, ...tp.prs.slice(-10).map(p => `- PR #${p.n} ${md(p.day)} ${p.t}`)].join('\n');
+    }
+    if (!f) throw new Error(`機能・話題「${q}」はありません。action="map" で確かめてください`);
     const iss = d.issues.filter(i => i.features.includes(f.id));
     const L = [`■ ${f.name}（id=${f.id}・入口：${f.group}）：${ST[f.state]}`, f.desc,
       `使うデータ：${f.data.map(k => d.nodes[k]?.name ?? k).join('、') || 'なし'}`,
@@ -123,6 +130,9 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
       ...[...dirs].sort((x, y) => y[1].length - x[1].length).slice(0, 6).map(([k, ns]) => `      - ${k}（${ns.map(n => '#' + n).join(' ')}）`),
       `   b. 申告の「足りなかった決まり」${lk.length}件 → 決まりに足すか、一回限りか（よく出るものは足す案に）`,
       ...lk.slice(0, 8).map(x => `      - PR #${x.n}：${x.t}`));
+    const nt = d.topics.filter(t => isNew(t.first));
+    L.push(`   c. 新しく出てきた話題（タグ）${nt.length}件 → 機能に上げる／別名にまとめる／話題のまま（案を添える）`,
+      ...nt.slice(0, 8).map(t => `      - ${t.name}（Issue ${t.issues.map(n => '#' + n).join(' ') || 'なし'}・PR ${t.prs.map(p => '#' + p.n).join(' ') || 'なし'}）`));
     const stale = d.issues.filter(i => i.stale);
     const stoppedOpen = d.features.filter(f => f.state === 2 && d.issues.some(i => i.open && i.features.includes(f.id)));
     const unused = Object.values(d.nodes).filter(n => n.note === '画面なし');

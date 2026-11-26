@@ -29,3 +29,21 @@ test('Issue の自己チェック：題・「機能：」・「閉じる条件�
   const ng = checkIssue(cat, { title: 'あとでやる', body: '機能：なにか\nメモ' }, []);
   assert.deepEqual(ng.map(x => x.ok), [false, false, false]);
 });
+
+test('タグ：@ は付けても付けなくてもよい・機能と話題に分ける・Issue は機能が増える（複数の入り口）', async () => {
+  const { tagsOf, splitTags, linkIssue } = await import('../src/workmap.ts');
+  const wn = CATALOGS['Watanabe-Masao/weather-note-cf'];
+  assert.deepEqual(tagsOf('説明\nタグ：@ウルフムーン、絵本 #空のイベント\n'), ['ウルフムーン', '絵本', '空のイベント']);
+  assert.deepEqual(splitTags(wn, ['ウルフムーン', '絵本', '空のイベント']), { features: ['story', 'event'], topics: ['ウルフムーン'] });
+  const l = linkIssue(wn, { number: 1, title: '満月の物語：残り', body: '機能：満月の物語\nタグ：空のイベント、ウルフムーン' });
+  assert.deepEqual([l.features, l.how], [['story', 'event'], '本文の「機能：」＋タグ']);
+});
+
+test('タグの自己チェック：3つまで・新しい話題は似たものを知らせる', () => {
+  const four = checkIssue(cat, { title: '地図の画面：x', body: '機能：地図の画面\n閉じる条件：スマホで見える\nタグ：a、b、c、d' }, []);
+  assert.equal(four.find(x => x.what.startsWith('タグ'))!.ok, false);
+  const nw = checkPr(cat, { title: '地図の画面：x', body: '関連：なし\nタグ：クラスター図' + REPORT, files: [] }, issues, new Set(['クラスター']));
+  assert.match(nw.find(x => x.what.includes('新しい話題'))!.what, /「クラスター図」は新しい話題。既にある「クラスター」のことなら/);
+  const old = checkPr(cat, { title: '地図の画面：x', body: '関連：なし\nタグ：クラスター' + REPORT, files: [] }, issues, new Set(['クラスター']));
+  assert.equal(old.some(x => x.what.includes('新しい話題')), false);
+});
