@@ -8,6 +8,8 @@ export interface Env {
   LINEAR_API_KEY: string;
   GITHUB_TOKEN?: string;
   ADMIN_TOKEN: string;
+  /** Claude のコネクタ（MCP）用の合言葉。URL の /mcp/<MCP_TOKEN> に入れる */
+  MCP_TOKEN?: string;
 }
 
 export type IssueRow = {

@@ -90,3 +90,11 @@ export function parseRules(src: string, kind: DocKind): { title: string | null; 
 /** 一時的な決まりらしい言葉。ドメインの言葉（気象の「暫定値」など）にも当たるので、候補として人が確かめる */
 export const TEMP_WORDS = /今回|当面|一旦|いったん|暫定|とりあえず|しばらく|まずは|今は|仮に|あとで|TODO|FIXME/;
 export const NEG_WORDS = /ない|しない|使わない|禁止|やめる|不要|避ける|書かない|入れない/;
+
+/** 決まりの中の「言葉」（識別子・かぎかっこの言葉）。同じ言葉が別の文書で説明されていないかを見る */
+export function termsOf(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/「([^」]{2,20})」/g)) out.add(m[1]);
+  for (const m of text.matchAll(/[A-Za-z][\w.-]*[\w]/g)) { const t = m[0]; if (t.length >= 2 && (/[\d._-]/.test(t) || t.length >= 4) && !/^(the|and|for|with|from|this|that|true|false|null|http|https|www|com)$/i.test(t)) out.add(t); }
+  return out;
+}

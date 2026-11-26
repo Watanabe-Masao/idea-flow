@@ -1,7 +1,7 @@
 // 決まりの見える化（#8）。リポジトリから決まりの文書を読み、単位に分け、意味の近さで問題を探す。
 // GitHub には書き込まない。人が「問題ではない」と決めたものは rule_dismissed に残る。
 import type { Env } from './types.ts';
-import { classify, defaultPick, parseRules, TEMP_WORDS, NEG_WORDS } from './rules-parse.ts';
+import { classify, defaultPick, parseRules, termsOf, TEMP_WORDS, NEG_WORDS } from './rules-parse.ts';
 import { loadVectors, upsertEmbeddings } from './embed.ts';
 import { dot, type Vec } from './vec.ts';
 import { bulkInsert, nowIso, sha256 } from './util.ts';
@@ -91,7 +91,7 @@ export async function analyze(env: Env) {
   for (const it of items) { const m = it.text.match(TEMP_WORDS); if (m && it.kind !== 'desc') add('temporary', it.id, null, null, { word: m[0] }); }
 
   // 重複と食い違いの候補：別の文書どうしで意味が近いもの（短すぎるものは除く）
-  const cand = items.filter(i => i.kind !== 'desc' && i.text.length >= 12 && vecs.has(i.id)).map(i => ({ i, v: vecs.get(i.id)! as Vec, neg: NEG_WORDS.test(i.text) }));
+  const cand = items.filter(i => i.kind !== 'desc' && i.text.length >= 12 && vecs.has(i.id)).map(i => ({ i, v: vecs.get(i.id)! as Vec, neg: NEG_WORDS.test(i.text), terms: termsOf(i.text) }));
   const pairs: { a: typeof cand[number]; b: typeof cand[number]; s: number }[] = [];
   for (let x = 0; x < cand.length; x++) for (let y = x + 1; y < cand.length; y++) {
     if (cand[x].i.doc === cand[y].i.doc) continue;
@@ -99,10 +99,13 @@ export async function analyze(env: Env) {
     if (s >= confT) pairs.push({ a: cand[x], b: cand[y], s });
   }
   pairs.sort((p, q) => q.s - p.s);
-  let nd = 0, nc = 0;
+  let nd = 0, nc = 0, nf = 0;
   for (const p of pairs) {
-    if (p.s >= dupT && nd < 80) { add('duplicate', p.a.i.id, p.b.i.id, p.s, {}); nd++; }
-    else if (p.s < dupT && p.a.neg !== p.b.neg && nc < 80) { add('conflict', p.a.i.id, p.b.i.id, p.s, {}); nc++; }
+    if (p.s >= dupT) { if (nd < 80) { add('duplicate', p.a.i.id, p.b.i.id, p.s, {}); nd++; } continue; }
+    // 同じ言葉を別の文書で説明している → 定義が分かれている（食い違いより先に見る）
+    const shared = [...p.a.terms].filter(t => p.b.terms.has(t));
+    if (shared.length) { if (nf < 80) { add('definition', p.a.i.id, p.b.i.id, p.s, { terms: shared.slice(0, 5) }); nf++; } continue; }
+    if (p.a.neg !== p.b.neg && nc < 80) { add('conflict', p.a.i.id, p.b.i.id, p.s, {}); nc++; }
   }
 
   // スキルの読み込まれ方：説明文どうしが近いと、間違った場面で読まれやすい
