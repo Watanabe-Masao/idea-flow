@@ -126,7 +126,7 @@ function issueView(d, s) {
   const axis = `<div class="wm-axis"><i></i><div>${ticks.map(k => `<span style="left:${(k - t0) / Math.max(1, N) * 100}%">${md(dstr(k))}</span>`).join('')}</div></div>`;
   const F = { all: () => true, open: i => i.open, closed: i => !i.open, stale: i => i.stale };
   const near = s.ifocus ? new Set([s.ifocus, ...(all.find(i => i.number === s.ifocus)?.links || []).filter(l => l.type === 'issue').map(l => l.n)]) : null;
-  const list = all.filter(i => near ? near.has(i.number) : F[s.ifilt](i)).sort((a, b) => a.created.localeCompare(b.created) || a.number - b.number);
+  const list = all.filter(i => near ? near.has(i.number) : F[s.ifilt](i)).sort((a, b) => (near ? (b.number === s.ifocus) - (a.number === s.ifocus) : 0) || a.created.localeCompare(b.created) || a.number - b.number); // 中心の Issue を先頭に
   const fname = id => d.features.find(f => f.id === id)?.name || id;
   const rows = list.map(i => {
     const end = i.closed || d.today, on = s.isel === i.number;
@@ -143,17 +143,23 @@ function issueView(d, s) {
     return `<div class="wm-tl${on ? ' on' : ''}" data-i="${i.number}" role="button" tabindex="0" aria-expanded="${on}"><div class="nm"><b>#${i.number}</b> ${esc(i.title)}</div>
       <div class="wm-track">${ticks.map(k => `<i class="ax" style="left:${(k - t0) / Math.max(1, N) * 100}%"></i>`).join('')}<i class="bar${i.open ? ' open' : ' done'}${i.stale ? ' stale' : ''}" style="left:${x(i.created)};width:calc(${x(end)} - ${x(i.created)})"></i>${prs}</div></div>${det}`;
   }).join('');
-  return `<p class="sub" style="margin-top:8px">Issue を立てた日から閉じた日（開いているものは今日）までを線で、つながるマージ（PR）を点で。押すと、つながりの種類と根拠（どこに書いてあったか）が出ます。番号で書かれていないものは「推測（候補）」として分けて出します。<br>出している範囲：${md(dstr(t0))}〜${md(d.today)}（${N}日・最長120日。機能の見方の期間とは別）</p>
-  <div class="wm-sum"><div><b>${all.length}</b><span>立てた Issue</span></div><div><b>${closed.length}</b><span>閉じた（かかった日数の中央 ${med ?? '—'}日）</span></div>
+  const intro = `<p class="sub" style="margin-top:8px">Issue を立てた日から閉じた日（開いているものは今日）までを線で、つながるマージ（PR）を点で。押すと、つながりの種類と根拠（どこに書いてあったか）が出ます。番号で書かれていないものは「推測（候補）」として分けて出します。<br>出している範囲：${md(dstr(t0))}〜${md(d.today)}（${N}日・最長120日。機能の見方の期間とは別）</p>`;
+  const overview = `<div class="wm-sum"><div><b>${all.length}</b><span>立てた Issue</span></div><div><b>${closed.length}</b><span>閉じた（かかった日数の中央 ${med ?? '—'}日）</span></div>
   <div class="hot"><b>${all.length - closed.length}</b><span>開いている</span></div><div><b style="color:var(--warn)">${all.filter(i => i.stale).length}</b><span>古くなっている候補</span></div></div>
   <h3>開いている Issue の数の移り変わり</h3><p class="sub">面は毎日の終わりに開いていた数。緑の棒は立てた数、灰の棒は閉じた数。</p>
   <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;width:100%;height:120px;margin-top:6px" role="img" aria-label="開いている Issue の数の移り変わり"><path d="${area}" fill="#2fae69" fill-opacity=".18" stroke="#2fae69" stroke-width=".6" vector-effect="non-scaling-stroke"/>${bars(opened, '#2fae69', 0)}${bars(closedN, 'var(--mute)', 1.4)}</svg>
-  <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--mute)"><span>${md(dstr(t0))}</span><span>いちばん多い日 ${Math.max(...openAt)}件・今 ${openAt.at(-1)}件</span><span>${md(d.today)}</span></div>
-  <h3>Issue ごとの経過</h3>
-  ${s.ifocus ? `<div class="row" style="margin-top:8px"><b>Issue #${s.ifocus} を中心に表示中</b><button class="btn" data-ifocus="" style="min-height:36px">すべてに戻す</button></div>` : ''}
-  <div class="wm-chips">${[['all', 'すべて'], ['open', '開いている'], ['closed', '閉じた'], ['stale', '古くなっている候補']].map(([v, l]) => `<button class="wm-chip" data-ifilt="${v}" aria-pressed="${s.ifilt === v}">${l}</button>`).join('')}</div>
-  <div class="wm-legend"><span><span class="wm-sw" style="background:#2fae69"></span>閉じた</span><span><span class="wm-sw" style="border:2px solid #2fae69"></span>開いている</span><span><span class="wm-sw" style="border:2px solid var(--warn)"></span>古くなっている候補</span><span>● 閉じた PR　○ 番号で参照　◌ 推測（候補）　数字＝同じ日のマージ</span></div>
+  <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--mute)"><span>${md(dstr(t0))}</span><span>いちばん多い日 ${Math.max(...openAt)}件・今 ${openAt.at(-1)}件</span><span>${md(d.today)}</span></div>`;
+  const filters = `<div class="wm-chips">${[['all', 'すべて'], ['open', '開いている'], ['closed', '閉じた'], ['stale', '古くなっている候補']].map(([v, l]) => `<button class="wm-chip" data-ifilt="${v}" aria-pressed="${s.ifilt === v}">${l}</button>`).join('')}</div>`;
+  const board = `<div class="wm-legend"><span><span class="wm-sw" style="background:#2fae69"></span>閉じた</span><span><span class="wm-sw" style="border:2px solid #2fae69"></span>開いている</span><span><span class="wm-sw" style="border:2px solid var(--warn)"></span>古くなっている候補</span><span>● 閉じた PR　○ 番号で参照　◌ 推測（候補）　数字＝同じ日のマージ</span></div>
   <div class="wm-board">${axis}${rows || '<p class="sub">該当なし</p>'}</div>`;
+  // 1つの Issue を中心にしているときは、その Issue の経過を先頭に。全体のグラフと絞り込みは「すべての Issue に戻る」の先へ（絞り込みが効かないボタンを出さない）
+  if (s.ifocus) {
+    const fi = all.find(i => i.number === s.ifocus);
+    return `<div class="wm-pick" style="display:block"><small>Issue の経過・この Issue と、つながる Issue ${Math.max(0, list.length - 1)}件</small><b>#${s.ifocus} ${esc(fi?.title || '')}</b>
+      <div class="row" style="margin-top:8px">${s.from ? `<button class="btn" data-back="1" style="min-height:40px">‹ ${esc(s.from.name)} に戻る</button>` : ''}<button class="btn" data-ifocus="" style="min-height:40px">すべての Issue に戻る</button></div></div>
+    ${board}<p class="sub" style="margin-top:8px">出している範囲：${md(dstr(t0))}〜${md(d.today)}（${N}日・最長120日）</p>`;
+  }
+  return `${intro}${overview}<h3>Issue ごとの経過</h3>${filters}${board}`;
 }
 
 // クラスター：機能ごとに、その機能の Issue（左）と、つながる PR（右）を線で。線の種類＝つながりの種類
@@ -346,17 +352,18 @@ function bind(el) {
     const s = st(REPO), t = e.target;
     if (t.closest('#wmsync')) { sync(REPO); return; }
     const sp = t.closest('[data-span]'); if (sp) { s.span = +sp.dataset.span; hideDay(); load(REPO).then(draw).catch(err => { s.note = err.message; draw(); }); return; }
-    const vw = t.closest('[data-view]'); if (vw) { s.view = vw.dataset.view; hideDay(); draw(); return; }
+    const vw = t.closest('[data-view]'); if (vw) { s.view = vw.dataset.view; s.from = null; hideDay(); draw(); return; }
     const ifl = t.closest('[data-ifilt]'); if (ifl) { s.ifilt = ifl.dataset.ifilt; draw(); return; }
-    const tt = t.closest('[data-totl]'); if (tt) { s.view = 'issue'; s.isel = +tt.dataset.totl; s.ifocus = +tt.dataset.totl; s.ifilt = 'all'; draw(); EL.querySelector(`.wm-tl[data-i="${s.isel}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
+    const tt = t.closest('[data-totl]'); if (tt) { s.from = { cl: s.cl, csel: s.csel, name: (EL.querySelector('.wm-pick b') || EL.querySelector('.wm-chip[aria-pressed="true"]'))?.textContent.replace(/\s+(PR\s*)?\d+(\/\d+)?$/, '') || '関連する作業' }; s.view = 'issue'; s.isel = +tt.dataset.totl; s.ifocus = +tt.dataset.totl; s.ifilt = 'all'; draw(); (EL.querySelector('.wm-pick') || EL.querySelector(`.wm-tl[data-i="${s.isel}"]`))?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     const cl = t.closest('[data-cl]'); if (cl) { s.cl = cl.dataset.cl; s.csel = null; s.pick = false; s.q = ''; draw(); return; }
     const pk = t.closest('[data-pick]'); if (pk) { s.pick = pk.dataset.pick === '1'; draw(); if (s.pick) EL.querySelector('#wmq')?.focus(); return; }
     if (t.closest('[data-qgo]')) { s.q = EL.querySelector('#wmq')?.value || ''; draw(); return; }
     const jp = t.closest('[data-jump]'); if (jp) { const [c, n] = jp.dataset.jump.split('|'); s.cl = c; s.csel = 'i' + n; s.pick = false; s.q = ''; draw(); EL.querySelector(`[data-cn="i${n}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     if (t.closest('[data-cand]')) { s.cand = !s.cand; draw(); return; }
     const cn = t.closest('[data-cn]'); if (cn) { s.csel = cn.dataset.cn === 'f' || s.csel === cn.dataset.cn ? null : cn.dataset.cn; draw(); return; }
-    const fo = t.closest('[data-ifocus]'); if (fo) { s.ifocus = fo.dataset.ifocus ? +fo.dataset.ifocus : null; draw(); return; }
-    const go = t.closest('[data-goto]'); if (go) { e.preventDefault(); s.isel = +go.dataset.goto; if (s.ifocus && !(s.data.issues.find(i => i.number === s.ifocus)?.links || []).some(l => l.n === s.isel) && s.ifocus !== s.isel) s.ifocus = null; s.ifilt = 'all'; draw(); EL.querySelector(`.wm-tl[data-i="${s.isel}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
+    const fo = t.closest('[data-ifocus]'); if (fo) { s.ifocus = fo.dataset.ifocus ? +fo.dataset.ifocus : null; s.from = null; if (!s.ifocus) s.ifilt = 'all'; draw(); return; }
+    if (t.closest('[data-back]') && s.from) { const f = s.from, n = s.ifocus; s.view = 'cluster'; s.cl = f.cl; s.csel = f.csel; s.ifocus = null; s.from = null; draw(); EL.querySelector(`[data-cn="i${n}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
+    const go = t.closest('[data-goto]'); if (go) { e.preventDefault(); s.isel = +go.dataset.goto; if (s.ifocus && !(s.data.issues.find(i => i.number === s.ifocus)?.links || []).some(l => l.n === s.isel) && s.ifocus !== s.isel) s.ifocus = null; s.ifilt = 'all'; draw(); (EL.querySelector('.wm-pick') || EL.querySelector(`.wm-tl[data-i="${s.isel}"]`))?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     const tl = t.closest('.wm-tl'); if (tl && !t.closest('a')) { s.isel = s.isel === +tl.dataset.i ? null : +tl.dataset.i; draw(); return; }
     const fl = t.closest('[data-filt]'); if (fl) { s.filt = +fl.dataset.filt; draw(); return; }
     if (t.closest('.wm-scr') || t.closest('a')) return;
