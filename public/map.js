@@ -161,6 +161,8 @@ const LK = { closes: ['これで閉じた', '#2fae69', ''], ref: ['番号で参�
 const LKOF = k => LK[k === 'child' ? 'parent' : k === 'to' ? 'from' : k];
 const KNAME = { parent: '親子（親）', child: '親子（子）', from: '引き継ぎ元（本文から）', to: '引き継ぎ先（本文から）', closes: 'これで閉じた', ref: '番号で参照', candidate: '推測（候補）' };
 // Issue のつながりを、種類ごとに・全部・GitHub へのリンクつきで（クラスターと Issue の経過で同じものを使う）
+// 推測を隠しているときは、隠した数も言う（一覧の総数とずれて、リンクが欠けたように見えないように）
+function linkCount(i, s) { const all = i.links.length, c = i.links.filter(l => l.kind === 'candidate').length; return s.cand || !c ? `${all}` : `表示${all - c}件・推測${c}件を非表示`; }
 function linkList(i, s) {
   const ls = i.links.filter(l => s.cand || l.kind !== 'candidate');
   if (!ls.length) return '<div>番号でのつながりも、同じ機能の作業も見つかりません</div>';
@@ -220,7 +222,7 @@ function clusterView(d, s) {
   // 選んだものの中身（根拠）
   let det = '<p class="sub" style="margin-top:8px">四角を押すと、つながりの根拠が出ます。</p>';
   const issueDet = i => `<div class="wm-det" style="border-top:1px solid var(--ink);border-radius:10px;margin-top:8px"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">Issue #${i.number} ${esc(i.title)}</a><div>立てた ${md(i.created)}${i.closed ? '・閉じた ' + md(i.closed) : '・開いている'}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>
-    <div class="row" style="margin-top:6px"><button class="btn" data-totl="${i.number}" style="min-height:36px">Issue の経過で見る</button></div><h4>つながり（${i.links.filter(l => s.cand || l.kind !== 'candidate').length}）</h4>${linkList(i, s)}</div>`;
+    <div class="row" style="margin-top:6px"><button class="btn" data-totl="${i.number}" style="min-height:36px">Issue の経過で見る</button></div><h4>つながり（${linkCount(i, s)}）</h4>${linkList(i, s)}</div>`;
   if (sel && sel.startsWith('i')) { const i = d.issues.find(x => x.number === +sel.slice(1)); if (i) det = issueDet(i); }
   if (sel && sel.startsWith('p')) { const p = prs.find(x => 'p' + x.n === sel); if (p) det = `<div class="wm-det" style="border-top:1px solid var(--ink);border-radius:10px;margin-top:8px"><a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">PR #${p.n} ${esc(p.title)}</a><div>マージ ${md(p.day)}</div>${p.edges.map(e => `<div class="wm-link"><span class="wm-kind${e.kind === 'candidate' ? ' k' : ''}">${LKOF(e.kind)[0]}</span>Issue #${e.i}${e.ev.map(x => `<div class="ev">根拠：${esc(x)}</div>`).join('')}</div>`).join('')}</div>`; }
   s._sheet = null;
@@ -236,7 +238,7 @@ function clusterView(d, s) {
     return `<div class="wm-cn f" style="position:static;width:auto;height:auto;margin-top:8px"><small>${f.topic ? '話題' : '機能・' + ST[f.state]}・Issue ${all.filter(i => i.open).length}/${all.length}（開いている/全部）</small><span>${esc(f.name)}</span></div>
     ${iss.map(i => { const on = selI === i.number; return `<div class="wm-row${on ? ' on' : ''}" data-cn="i${i.number}" role="button" tabindex="0" aria-expanded="${on}" style="display:block;margin-top:6px;border-color:${on ? 'var(--ink)' : 'var(--line)'};border-left:4px solid ${i.open ? (i.stale ? 'var(--warn)' : '#2fae69') : 'var(--line)'}">
       <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--mute)"><b>Issue #${i.number}</b><span>${i.open ? (i.stale ? '古くなっている候補' : '開いている') : '閉じた ' + md(i.closed)}</span></div>
-      <div style="font-size:14px;font-weight:600;line-height:1.4">${esc(i.title)}</div><div class="sub" style="font-size:12px">${i.links.length}件：${esc(kinds(i))}</div></div>${on ? issueDet(i).replace('border-top:1px solid var(--ink);border-radius:10px;margin-top:8px', 'margin-top:0') : ''}`; }).join('')}
+      <div style="font-size:14px;font-weight:600;line-height:1.4">${esc(i.title)}</div><div class="sub" style="font-size:12px">${i.links.length}件${!s.cand && i.links.some(l => l.kind === 'candidate') ? `（うち推測${i.links.filter(l => l.kind === 'candidate').length}件）` : ''}：${esc(kinds(i))}</div></div>${on ? issueDet(i).replace('border-top:1px solid var(--ink);border-radius:10px;margin-top:8px', 'margin-top:0') : ''}`; }).join('')}
     ${prOnly.length ? `<h3>このタグを付けた PR（Issue につながらないもの）</h3><ul style="font-size:13.5px;padding-left:1.2em">${prOnly.map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">PR #${p.n}</a> ${md(p.day)} ${esc(p.t)}</li>`).join('')}</ul>` : ''}`;
   }
 }
