@@ -91,3 +91,16 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
   assert.deepEqual(v.counts, { prs: 5, building: 1, settled: 1, stopped: 1, openIssues: 2, stale: 1, unused: 1 });
   delete CATALOGS['o/r'];
 });
+
+test('Issue とマージのつながり：閉じると書いたもの・題と説明の「#数字」（Issue の番号だけ、古い順）', async () => {
+  const { prsByIssue } = await import('../src/workmap.ts');
+  const p = (number: number, day: string, title: string, body: string, closes: number[] = []) => ({ number, title, url: 'u' + number, merged_at: day + 'T03:00:00Z', files: [], body, closes });
+  const m = prsByIssue([
+    p(30, '2026-11-20', '満月の物語：残り（#11 の続き）', '関連：#12、PR #29'),
+    p(20, '2026-11-18', 'はじめ', 'Closes #11', [11]),
+    p(31, '2026-11-21', 'ほか', 'see https://x/#11 と &#11;'),
+  ], new Set([11, 12]));
+  assert.deepEqual(m.get(11)!.map(x => [x.n, x.closes]), [[20, true], [30, false]]);
+  assert.deepEqual(m.get(12)!.map(x => x.n), [30]);
+  assert.equal(m.has(29), false);
+});

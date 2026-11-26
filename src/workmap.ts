@@ -17,7 +17,7 @@ export interface Catalog {
 }
 export const catalogOf = (repo: string): Catalog | null => CATALOGS[repo] ?? null;
 
-type Pr = { number: number; title: string; url: string; merged_at: string; files: string[] };
+type Pr = { number: number; title: string; url: string; merged_at: string; files: string[]; body: string; closes: number[] };
 type Issue = { number: number; open: number; title: string; body: string; created: string; updated: string; closed: string | null };
 
 /** 変えたファイルから機能を決める（その機能の files のどれかに当たれば、その機能の作業） */
@@ -61,8 +61,8 @@ async function graphql<T>(env: Env, query: string, variables: Record<string, unk
   throw new Error('GitHub（GraphQL）: ' + last);
 }
 
-const PR_Q = `query($o:String!,$n:String!,$after:String,$dir:OrderDirection!,$field:IssueOrderField!){repository(owner:$o,name:$n){pullRequests(states:MERGED,first:50,after:$after,orderBy:{field:$field,direction:$dir}){pageInfo{hasNextPage endCursor} nodes{number title url mergedAt body files(first:100){nodes{path}}}}}}`;
-type PrPage = { repository: { pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { number: number; title: string; url: string; mergedAt: string; body: string; files: { nodes: { path: string }[] } | null }[] } } };
+const PR_Q = `query($o:String!,$n:String!,$after:String,$dir:OrderDirection!,$field:IssueOrderField!){repository(owner:$o,name:$n){pullRequests(states:MERGED,first:50,after:$after,orderBy:{field:$field,direction:$dir}){pageInfo{hasNextPage endCursor} nodes{number title url mergedAt body files(first:100){nodes{path}} closingIssuesReferences(first:10){nodes{number}}}}}}`;
+type PrPage = { repository: { pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { number: number; title: string; url: string; mergedAt: string; body: string; files: { nodes: { path: string }[] } | null; closingIssuesReferences?: { nodes: { number: number }[] } | null }[] } } };
 
 /**
  * 取り込み。PR は古い順に50件ずつさかのぼり（続きの位置を覚える）、毎回いちばん新しく動いた50件も読む。
@@ -75,9 +75,9 @@ export async function syncMap(env: Env, repo: string, pages = 4) {
   let cursor = st?.pr_cursor ?? null, done = !!st?.pr_done, got = 0;
   const now = nowIso();
   const save = (nodes: PrPage['repository']['pullRequests']['nodes']) => nodes.map(p => env.DB.prepare(
-    `INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(repo, number) DO UPDATE SET title = excluded.title, body = excluded.body, files = excluded.files, fetched_at = excluded.fetched_at`)
-    .bind(repo, p.number, p.title, p.url, p.mergedAt, p.body ?? '', JSON.stringify((p.files?.nodes ?? []).map(f => f.path)), now));
+    `INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(repo, number) DO UPDATE SET title = excluded.title, body = excluded.body, files = excluded.files, fetched_at = excluded.fetched_at, closes = excluded.closes`)
+    .bind(repo, p.number, p.title, p.url, p.mergedAt, p.body ?? '', JSON.stringify((p.files?.nodes ?? []).map(f => f.path)), now, JSON.stringify((p.closingIssuesReferences?.nodes ?? []).map(x => x.number))));
   const stmts: D1PreparedStatement[] = [];
   for (let k = 0; k < pages && !done; k++) {
     const d = await graphql<PrPage>(env, PR_Q, { o, n, after: cursor, dir: 'ASC', field: 'CREATED_AT' });
@@ -104,6 +104,24 @@ export async function syncMap(env: Env, repo: string, pages = 4) {
   return { prs: got, backfillDone: done, issues: issues.filter(x => !x.pull_request).length };
 }
 
+/**
+ * Issue とマージ（PR）のつながり：PR が閉じると書いたもの（closingIssuesReferences、「Closes #n」）と、
+ * PR の題・説明に出てくる「#数字」のうち Issue の番号のもの。古い順。
+ */
+export function prsByIssue(prs: Pr[], issueNumbers: Set<number>) {
+  const out = new Map<number, { n: number; t: string; day: string; url: string; closes: boolean }[]>();
+  for (const p of [...prs].sort((a, b) => a.merged_at.localeCompare(b.merged_at))) {
+    const refs = new Set<number>(p.closes);
+    for (const m of `${p.title}\n${p.body}`.matchAll(/(?<![\w/&])#(\d+)\b/g)) refs.add(Number(m[1]));
+    for (const n of refs) {
+      if (!issueNumbers.has(n) || n === p.number) continue;
+      if (!out.has(n)) out.set(n, []);
+      out.get(n)!.push({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url, closes: p.closes.includes(n) });
+    }
+  }
+  return out;
+}
+
 const addDays = (day: string, n: number) => new Date(Date.parse(day + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
 
 /**
@@ -115,8 +133,8 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   const sync = await env.DB.prepare('SELECT pr_done, issues_at, prs_at FROM map_sync WHERE repo = ?').bind(repo).first<{ pr_done: number; issues_at: string | null; prs_at: string | null }>();
   if (!cat) return { repo, catalog: false, sync };
   const days = Array.from({ length: span }, (_, k) => addDays(today, k - span + 1));
-  const prs: Pr[] = (await env.DB.prepare('SELECT number, title, url, merged_at, files FROM pr_activity WHERE repo = ? ORDER BY merged_at DESC').bind(repo).all<Pr & { files: string }>()).results
-    .map(r => ({ ...r, files: JSON.parse(r.files as unknown as string) as string[] }));
+  const prs: Pr[] = (await env.DB.prepare('SELECT number, title, url, merged_at, files, body, closes FROM pr_activity WHERE repo = ? ORDER BY merged_at DESC').bind(repo).all<Record<string, unknown>>()).results
+    .map(r => ({ ...r, files: JSON.parse(String(r.files)), closes: JSON.parse(String(r.closes ?? '[]')) }) as Pr);
   const of = new Map(prs.map(p => [p.number, featuresOfFiles(cat, p.files)]));
   const idx = new Map(days.map((d, k) => [d, k]));
   const features = cat.features.map(f => {
@@ -131,11 +149,13 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   });
   const stOf = new Map(features.map(f => [f.id, f.state]));
   const old = addDays(today, -7);
-  const issues = (await env.DB.prepare('SELECT * FROM map_issues WHERE repo = ? ORDER BY open DESC, updated DESC').bind(repo).all<Issue>()).results.map(i => {
+  const rows = (await env.DB.prepare('SELECT * FROM map_issues WHERE repo = ? ORDER BY open DESC, updated DESC').bind(repo).all<Issue>()).results;
+  const prsOf = prsByIssue(prs, new Set(rows.map(i => i.number)));
+  const issues = rows.map(i => {
     const l = linkIssue(cat, i);
     const fs = l.features.filter(id => stOf.has(id));
     const stale = !!i.open && fs.length > 0 && fs.every(id => stOf.get(id) === 2) && jstDay(i.updated) < old;
-    return { number: i.number, open: !!i.open, title: i.title, updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale };
+    return { number: i.number, open: !!i.open, title: i.title, created: jstDay(i.created), updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale, prs: prsOf.get(i.number) ?? [] };
   });
   const inSpan = prs.filter(p => idx.has(jstDay(p.merged_at)));
   const unmatched = inSpan.filter(p => !of.get(p.number)!.length).map(p => ({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url }));
