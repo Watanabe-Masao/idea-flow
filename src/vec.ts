@@ -94,3 +94,42 @@ export function sweep(pairs: { score: number; correct: boolean }[], from = 0.4, 
   }
   return rows;
 }
+
+/** コミット文の先頭の見出し（「予報の履歴：…」→「予報の履歴」）。なければ null */
+export function headingOf(message: string): string | null {
+  const m = message.match(/^\s*([^：:\n]{1,20})[：:]/);
+  return m ? m[1].trim().toLowerCase() : null;
+}
+
+/** 正解ラベルつきの手本（番号で確定・承認・手で振り分けたコミット、または課題そのもの） */
+export type Example = { vec: Vec; label: string; heading: string | null; key: string; group?: string | null };
+export type Vote = { id: string; score: number; sim: number }[];
+
+/**
+ * 手本との近さによる多数決。近い上位 k 件が、近さ（4乗で差を強調）× 見出しが同じなら加点 で票を入れる。
+ * score は票の割合（0〜1）、sim はそのラベルの手本でいちばん近いもの。
+ */
+export function knnVote(q: Vec, heading: string | null, examples: Example[], opt: { k?: number; headingBoost?: number; skip?: (e: Example) => boolean } = {}): Vote {
+  const k = opt.k ?? 7, boost = opt.headingBoost ?? 1;
+  const near: { e: Example; s: number }[] = [];
+  for (const e of examples) { if (opt.skip?.(e)) continue; near.push({ e, s: dot(q, e.vec) }); }
+  near.sort((a, b) => b.s - a.s);
+  const votes = new Map<string, { w: number; sim: number }>();
+  let total = 0;
+  for (const { e, s } of near.slice(0, k)) {
+    const w = Math.pow(Math.max(0, s), 4) * (heading && e.heading === heading ? 1 + boost : 1);
+    const v = votes.get(e.label) ?? { w: 0, sim: 0 };
+    v.w += w; v.sim = Math.max(v.sim, s); votes.set(e.label, v);
+    total += w;
+  }
+  return [...votes].map(([id, v]) => ({ id, score: total ? v.w / total : 0, sim: v.sim })).sort((a, b) => b.score - a.score);
+}
+
+/** 票の割合と、いちばん近い手本の近さから、自動・確認待ち・該当なしを決める */
+export function decideVote(top: Vote, auto: number, ask: number, minSim: number): Decision {
+  const t = top[0];
+  if (!t || t.sim < minSim) return { level: 'none', target: null, score: t?.score ?? 0 };
+  if (t.score >= auto) return { level: 'auto', target: t.id, score: t.score };
+  if (t.score >= ask) return { level: 'pending', target: t.id, score: t.score };
+  return { level: 'none', target: null, score: t.score };
+}

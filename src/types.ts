@@ -30,4 +30,5 @@ export type Settings = {
   theme_auto: number; theme_ask: number;
   cluster_link: number; cluster_min: number;
   premise_min: number;
+  min_sim: number;
 };

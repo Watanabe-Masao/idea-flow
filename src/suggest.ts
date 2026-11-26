@@ -1,6 +1,6 @@
 import type { CommitRow, Env, IssueRow, Settings, SuggestionKind } from './types.ts';
 import { loadVectors } from './embed.ts';
-import { centroid, decide, dot, medoid, sweep, threshClusters, topK, type Vec } from './vec.ts';
+import { centroid, decideVote, dot, headingOf, knnVote, medoid, sweep, threshClusters, topK, type Example, type Vec } from './vec.ts';
 import { bulkInsert, nowIso, sha256 } from './util.ts';
 
 export async function loadSettings(env: Env): Promise<Settings> {
@@ -8,10 +8,11 @@ export async function loadSettings(env: Env): Promise<Settings> {
   const m = Object.fromEntries(rows.results.map(r => [r.key, r.value]));
   const n = (k: string, d: number) => (m[k] !== undefined && m[k] !== '' ? Number(m[k]) : d);
   return {
-    issue_auto: n('issue_auto', 0.8), issue_ask: n('issue_ask', 0.66),
-    theme_auto: n('theme_auto', 0.72), theme_ask: n('theme_ask', 0.6),
+    issue_auto: n('issue_auto', 0.75), issue_ask: n('issue_ask', 0.5),
+    theme_auto: n('theme_auto', 0.8), theme_ask: n('theme_ask', 0.55),
     cluster_link: n('cluster_link', 0.7), cluster_min: n('cluster_min', 3),
     premise_min: n('premise_min', 0.7),
+    min_sim: n('min_sim', 0.5),
   };
 }
 
@@ -80,6 +81,33 @@ export async function assignments(env: Env): Promise<{ map: Map<string, Assignme
   return { map, issues, commits };
 }
 
+/**
+ * 手本づくり：答えが分かっているもの（番号で確定・手で振り分け・承認済みのコミット、課題そのもの）。
+ * 課題を当てる手本と、テーマを当てる手本を別々に持つ。
+ */
+type Known = Map<string, { issue: string | null; theme: string | null }>;
+function buildExamples(issues: IssueRow[], commits: CommitRow[], issueVecs: Map<string, Vec>, commitVecs: Map<string, Vec>, known: Known) {
+  const themeOf = new Map(issues.map(i => [i.id, i.theme_key]));
+  const usable = new Set(issues.filter(i => !CLOSED_FOR_MATCH.has(i.state_type)).map(i => i.id));
+  const issueEx: Example[] = [], themeEx: Example[] = [];
+  for (const i of issues) {
+    const v = issueVecs.get(i.id);
+    if (!v) continue;
+    const h = headingOf(i.title.replace(/^#\d+\s*/, ''));
+    if (usable.has(i.id)) issueEx.push({ vec: v, label: i.id, heading: h, key: i.id });
+    if (i.theme_key) themeEx.push({ vec: v, label: i.theme_key, heading: h, key: i.id });
+  }
+  for (const c of commits) {
+    const k = known.get(c.sha), v = commitVecs.get(c.sha);
+    if (!k || !v) continue;
+    const h = headingOf(c.message);
+    if (k.issue && usable.has(k.issue)) issueEx.push({ vec: v, label: k.issue, heading: h, key: c.sha, group: c.pr_number != null ? String(c.pr_number) : null });
+    const t = k.theme ?? (k.issue ? themeOf.get(k.issue) ?? null : null);
+    if (t) themeEx.push({ vec: v, label: t, heading: h, key: c.sha, group: c.pr_number != null ? String(c.pr_number) : null });
+  }
+  return { issueEx, themeEx };
+}
+
 // 人が決めていない提案は毎回消して作り直す。決めたもの（accepted / rejected）は UNIQUE(kind, subject) で守られ、上書きされない
 const INSERT_HEAD = 'INSERT OR IGNORE INTO suggestions (id, kind, subject, target, score, detail, status, created_at) VALUES';
 
@@ -95,17 +123,17 @@ export async function computeSuggestions(env: Env) {
   const themeOf = new Map(issues.map(i => [i.id, i.theme_key]));
   const now = nowIso();
 
-  // 課題の候補（重複にした課題は除く）
-  const matchIssues = new Map<string, Vec>();
-  for (const i of issues) if (!CLOSED_FOR_MATCH.has(i.state_type) && issueVecs.has(i.id)) matchIssues.set(i.id, issueVecs.get(i.id)!);
-
-  // テーマの重心：テーマの課題＋番号で確定したコミット＋承認済みのコミット
+  // 答えが分かっているコミット：番号 → 手で振り分け → 承認済み
   const accepted = (await env.DB.prepare("SELECT kind, subject, target FROM suggestions WHERE status='accepted' AND kind IN ('commit_issue','commit_theme')").all<{ kind: string; subject: string; target: string }>()).results;
+  const known: Known = new Map();
+  for (const a of accepted) known.set(a.subject, a.kind === 'commit_issue' ? { issue: a.target, theme: null } : { issue: null, theme: a.target });
+  for (const [sha, m] of manual) known.set(sha, { issue: m.issue ?? null, theme: m.theme ?? null });
+  for (const [sha, id] of nums) known.set(sha, { issue: id, theme: null });
+  const { issueEx, themeEx } = buildExamples(issues, commits, issueVecs, commitVecs, known);
+
+  // テーマの重心（新しい塊・前提の判定に使う）：課題＋答えが分かっているコミット
   const members = new Map<string, Vec[]>();
-  const push = (t: string | null | undefined, v: Vec | undefined) => { if (t && v) (members.get(t) ?? members.set(t, []).get(t)!).push(v); };
-  for (const i of issues) push(i.theme_key, issueVecs.get(i.id));
-  for (const [sha, id] of nums) push(themeOf.get(id), commitVecs.get(sha));
-  for (const a of accepted) push(a.kind === 'commit_issue' ? themeOf.get(a.target) : a.target, commitVecs.get(a.subject));
+  for (const e of themeEx) (members.get(e.label) ?? members.set(e.label, []).get(e.label)!).push(e.vec);
   const themeVecs = new Map<string, Vec>();
   for (const [t, vs] of members) { const c = centroid(vs); if (c) themeVecs.set(t, c); }
 
@@ -114,20 +142,21 @@ export async function computeSuggestions(env: Env) {
   let nIssue = 0, nTheme = 0;
   for (const c of commits) {
     const v = commitVecs.get(c.sha);
-    if (!v || nums.has(c.sha) || manual.has(c.sha)) continue;
+    if (!v || known.has(c.sha)) continue;
     if (decided.has(`commit_issue|${c.sha}`) || decided.has(`commit_theme|${c.sha}`)) continue;
-    const ti = topK(v, matchIssues, 3);
-    const di = decide(ti, st.issue_auto, st.issue_ask);
+    const h = headingOf(c.message);
+    const ti = knnVote(v, h, issueEx);
+    const di = decideVote(ti, st.issue_auto, st.issue_ask, st.min_sim);
     if (di.level !== 'none') {
       nIssue++;
-      rows.push([`s_ci_${c.sha.slice(0, 12)}`, 'commit_issue', c.sha, di.target, di.score, JSON.stringify({ top: ti }), di.level, now]);
+      rows.push([`s_ci_${c.sha.slice(0, 12)}`, 'commit_issue', c.sha, di.target, di.score, JSON.stringify({ top: ti.slice(0, 3), heading: h }), di.level, now]);
       continue;
     }
-    const tt = topK(v, themeVecs, 3);
-    const dt = decide(tt, st.theme_auto, st.theme_ask);
+    const tt = knnVote(v, h, themeEx);
+    const dt = decideVote(tt, st.theme_auto, st.theme_ask, st.min_sim);
     if (dt.level !== 'none') {
       nTheme++;
-      rows.push([`s_ct_${c.sha.slice(0, 12)}`, 'commit_theme', c.sha, dt.target, dt.score, JSON.stringify({ top: tt, issueTop: ti }), dt.level, now]);
+      rows.push([`s_ct_${c.sha.slice(0, 12)}`, 'commit_theme', c.sha, dt.target, dt.score, JSON.stringify({ top: tt.slice(0, 3), issueTop: ti.slice(0, 3), heading: h }), dt.level, now]);
     } else unassigned.push(c.sha);
   }
 
@@ -172,44 +201,68 @@ export async function computeSuggestions(env: Env) {
 }
 
 /**
- * 答え合わせ：番号で確定しているコミットを正解として、
- * bge-m3 の近さだけで同じ課題・テーマを当てられるかを測る。
- * テーマの重心はコミットを混ぜず課題だけで作る（答えが漏れないように）。
+ * 答え合わせ：番号で確定しているコミットを正解として、手本との多数決で当てられるかを測る。
+ * 1件ずつ「自分」と「同じPRのコミット」を手本から抜いて当てる（答えが漏れないように）。
+ * 参考として、前の方式（課題の文との近さだけ）の正解率も出す。
  */
 export async function evaluate(env: Env) {
+  const st = await loadSettings(env);
   const issues = (await env.DB.prepare('SELECT * FROM issues').all<IssueRow>()).results;
   const commits = (await env.DB.prepare('SELECT * FROM commits WHERE is_merge = 0').all<CommitRow>()).results;
+  const rels = (await env.DB.prepare('SELECT a, b FROM relations').all<{ a: string; b: string }>()).results;
   const issueVecs = await loadVectors(env, 'issue');
   const commitVecs = await loadVectors(env, 'commit');
   const nums = numberLinks(commits, issues);
   const themeOf = new Map(issues.map(i => [i.id, i.theme_key]));
+  const parentOf = new Map(issues.map(i => [i.id, i.parent_id]));
+  const byId = new Map(commits.map(c => [c.sha, c]));
+
+  // 「ほぼ正解」：親子・兄弟・関係が登録されている課題
+  const linked = new Set<string>();
+  for (const r of rels) { linked.add(`${r.a}|${r.b}`); linked.add(`${r.b}|${r.a}`); }
+  const near = (a: string, b: string) => a === b || parentOf.get(a) === b || parentOf.get(b) === a
+    || (!!parentOf.get(a) && parentOf.get(a) === parentOf.get(b)) || linked.has(`${a}|${b}`);
+
+  const known: Known = new Map([...nums].map(([sha, id]) => [sha, { issue: id, theme: null }]));
+  const { issueEx, themeEx } = buildExamples(issues, commits, issueVecs, commitVecs, known);
   const matchIssues = new Map([...issueVecs].filter(([id]) => issues.find(i => i.id === id && !CLOSED_FOR_MATCH.has(i.state_type))));
-  const byTheme = new Map<string, Vec[]>();
-  for (const i of issues) if (i.theme_key && issueVecs.has(i.id)) (byTheme.get(i.theme_key) ?? byTheme.set(i.theme_key, []).get(i.theme_key)!).push(issueVecs.get(i.id)!);
-  const themeVecs = new Map([...byTheme].map(([t, vs]) => [t, centroid(vs)!]));
-  const issuePairs: { score: number; correct: boolean }[] = [], themePairs: { score: number; correct: boolean }[] = [];
-  const misses: { message: string; truth: string; guess: string; score: number }[] = [];
+
+  type Pair = { score: number; correct: boolean; near: boolean };
+  const issuePairs: Pair[] = [], themePairs: Pair[] = [];
+  let oldIssueOk = 0, oldN = 0;
+  const misses: { message: string; truth: string; guess: string; score: number; near: boolean }[] = [];
   for (const [sha, truth] of nums) {
-    const v = commitVecs.get(sha);
-    if (!v) continue;
-    // 番号そのものが手がかりにならないよう、埋め込みの文からは番号を落としてある（embedText）
-    const ti = topK(v, matchIssues, 1)[0];
+    const v = commitVecs.get(sha), c = byId.get(sha);
+    if (!v || !c) continue;
+    const grp = c.pr_number != null ? String(c.pr_number) : null;
+    const skip = (e: Example) => e.key === sha || (grp != null && e.group === grp);
+    const h = headingOf(c.message);
+    const ti = knnVote(v, h, issueEx, { skip })[0];
     if (ti) {
-      issuePairs.push({ score: ti.score, correct: ti.id === truth });
-      if (ti.id !== truth && misses.length < 15) misses.push({ message: commits.find(c => c.sha === sha)!.message, truth, guess: ti.id, score: Math.round(ti.score * 1000) / 1000 });
+      const ok = ti.id === truth, nr = near(ti.id, truth);
+      issuePairs.push({ score: ti.sim < st.min_sim ? 0 : ti.score, correct: ok, near: nr });
+      if (!ok && misses.length < 15) misses.push({ message: c.message, truth, guess: ti.id, score: Math.round(ti.score * 100) / 100, near: nr });
     }
-    const tt = topK(v, themeVecs, 1)[0];
     const truthTheme = themeOf.get(truth);
-    if (tt && truthTheme) themePairs.push({ score: tt.score, correct: tt.id === truthTheme });
+    const tt = knnVote(v, h, themeEx, { skip })[0];
+    if (tt && truthTheme) themePairs.push({ score: tt.sim < st.min_sim ? 0 : tt.score, correct: tt.id === truthTheme, near: tt.id === truthTheme });
+    const old = topK(v, matchIssues, 1)[0];
+    if (old) { oldN++; if (old.id === truth) oldIssueOk++; }
   }
-  const acc = (p: { correct: boolean }[]) => (p.length ? p.filter(x => x.correct).length / p.length : 0);
-  const pick = (rows: ReturnType<typeof sweep>, minPrecision: number) => rows.find(r => r.precision >= minPrecision && r.covered >= 3)?.threshold ?? null;
-  const issueSweep = sweep(issuePairs), themeSweep = sweep(themePairs);
+  const acc = (p: Pair[], f: (x: Pair) => boolean) => (p.length ? p.filter(f).length / p.length : 0);
+  const sw = (p: Pair[]) => sweep(p, 0.3, 1.0, 0.05).map(r => {
+    const kept = p.filter(x => x.score >= r.threshold);
+    return { ...r, nearPrecision: kept.length ? kept.filter(x => x.near).length / kept.length : 0 };
+  });
+  const pick = (rows: ReturnType<typeof sw>, minPrecision: number) => rows.find(r => r.precision >= minPrecision && r.covered >= 3)?.threshold ?? null;
+  const issueSweep = sw(issuePairs), themeSweep = sw(themePairs);
   return {
     groundTruth: issuePairs.length,
-    issue: { top1Accuracy: acc(issuePairs), sweep: issueSweep, suggestedAuto: pick(issueSweep, 0.9), suggestedAsk: pick(issueSweep, 0.6) },
-    theme: { top1Accuracy: acc(themePairs), sweep: themeSweep, suggestedAuto: pick(themeSweep, 0.9), suggestedAsk: pick(themeSweep, 0.6) },
+    method: '手本のコミットとの多数決（見出しが同じなら加点）',
+    oldIssueTop1: oldN ? oldIssueOk / oldN : 0,
+    issue: { top1Accuracy: acc(issuePairs, x => x.correct), nearAccuracy: acc(issuePairs, x => x.near), sweep: issueSweep, suggestedAuto: pick(issueSweep, 0.9), suggestedAsk: pick(issueSweep, 0.6) },
+    theme: { top1Accuracy: acc(themePairs, x => x.correct), nearAccuracy: acc(themePairs, x => x.near), sweep: themeSweep, suggestedAuto: pick(themeSweep, 0.9), suggestedAsk: pick(themeSweep, 0.6) },
     misses,
-    note: '正解が少ない（数十件）ので、しきい値は目安です。決めた値は /api/settings で保存します。',
+    note: '1件ずつ、自分と同じPRのコミットを手本から外して当てています。正解が少ないので、しきい値は目安です。',
   };
 }

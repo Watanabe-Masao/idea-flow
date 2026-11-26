@@ -32,7 +32,7 @@ table{border-collapse:collapse;font-size:13px;width:100%}td,th{padding:4px 6px;b
 .alts{display:flex;flex-direction:column;gap:6px;margin-top:6px}.alts .btn{text-align:left;min-height:44px;padding:6px 12px;line-height:1.35}
 </style></head><body><div class="wrap">
 <h1>idea-flow</h1>
-<p class="sub">行はLinearのテーマと課題、点はGitHubのコミット。番号で確定したものは黒、意味の近さ（bge‑m3）で自動で決めたものは灰。赤い小さな印は確認待ちを含む点。</p>
+<p class="sub">行はLinearのテーマと課題、点はGitHubのコミット。番号で確定したものは黒、手本との多数決（bge‑m3）で自動で決めたものは灰。赤い小さな印は確認待ちを含む点。</p>
 <div class="card" id="gate" hidden><label for="tok" class="sub">合言葉（ADMIN_TOKEN）</label><div class="row"><input id="tok" type="password" autocomplete="current-password" style="flex:1"><button class="btn p" id="saveTok">使う</button></div></div>
 <div class="tabs" role="tablist"><button class="tab" data-v="map" role="tab">流れ</button><button class="tab" data-v="pending" role="tab">確認待ち <b id="pc"></b></button><button class="tab" data-v="eval" role="tab">答え合わせ</button><button class="btn" id="sync" style="margin-left:auto">取り込み直す</button></div>
 <div id="msg" aria-live="polite"></div>
@@ -40,7 +40,7 @@ table{border-collapse:collapse;font-size:13px;width:100%}td,th{padding:4px 6px;b
 <div class="legend"><span>● 確定・承認済み</span><span style="color:var(--mute)">● 自動（近さ）</span><span>○ 確認待ちだけ</span><span><span style="color:var(--red)">•</span> 確認待ちを含む</span><span>点の数字＝コミット数</span><span>右端：▶進行中 ○未着手 ✓完了 ×中止 ＝重複</span></div></div>
 <div class="card" id="detail"><p class="sub">行をタップすると課題とつながり、点をタップするとコミットが出ます。</p></div></section>
 <section id="v-pending" hidden><div class="card" id="plist"></div></section>
-<section id="v-eval" hidden><div class="card" id="elist"><p class="sub">番号で確定しているコミットを正解として、bge‑m3 の近さだけでどこまで当てられるかを測ります。</p><div class="row"><button class="btn p" id="runEval">答え合わせをする</button></div></div></section>
+<section id="v-eval" hidden><div class="card" id="elist"><p class="sub">番号で確定しているコミットを正解として、手本のコミットとの多数決でどこまで当てられるかを測ります。</p><div class="row"><button class="btn p" id="runEval">答え合わせをする</button></div></div></section>
 </div>
 <script>
 {
@@ -100,7 +100,7 @@ function draw(){if(!M)return;const W=fig.clientWidth||360,narrow=W<560,X0=narrow
 function links(id){const i=IS[id],out=[];if(i.p)out.push(['親',i.p]);(kids[id]||[]).forEach(k=>out.push(['子',k]));
  M.relations.forEach(r=>{const t=r.type==='duplicate'?'重複':r.type==='related'?'関連':r.type;if(r.a===id)out.push([t,r.b]);if(r.b===id)out.push([t,r.a])});return out}
 const HOW={number:'番号で確定',manual:'手で振り分け',accepted:'承認済み',auto:'自動（近さ）',pending:'確認待ち',none:'本流'};
-function cLi(c){return`<li>${esc(c.m)}<small>${c.d.slice(5).replace('-','/')}・${HOW[c.h]}${c.sc!=null?'（近さ '+(+c.sc).toFixed(2)+'）':''}${c.i?'・'+esc(c.i):''}${c.pr?'・PR #'+esc(c.pr):''} ・ <a href="${esc(c.u)}" target="_blank" rel="noopener">コミット</a></small>${c.h==='pending'&&c.sg?`<div class="row"><button class="btn p" data-dec="accept" data-id="${esc(c.sg)}">承認</button><button class="btn" data-dec="reject" data-id="${esc(c.sg)}">却下</button></div>`:''}</li>`}
+function cLi(c){return`<li>${esc(c.m)}<small>${c.d.slice(5).replace('-','/')}・${HOW[c.h]}${c.sc!=null?'（確からしさ '+(+c.sc).toFixed(2)+'）':''}${c.i?'・'+esc(c.i):''}${c.pr?'・PR #'+esc(c.pr):''} ・ <a href="${esc(c.u)}" target="_blank" rel="noopener">コミット</a></small>${c.h==='pending'&&c.sg?`<div class="row"><button class="btn p" data-dec="accept" data-id="${esc(c.sg)}">承認</button><button class="btn" data-dec="reject" data-id="${esc(c.sg)}">却下</button></div>`:''}</li>`}
 function detail(){const el=$('#detail');if(!sel){el.innerHTML='<p class="sub">行をタップすると課題とつながり、点をタップするとコミットが出ます。</p>';return}
  const cs=M.commits.filter(c=>rowOf(c)===sel).reverse();
  if(sel==='__main'){el.innerHTML=`<h2>本流（テーマなし）</h2><p class="sub">番号もなく、どのテーマにも近くなかったコミット ${cs.length}件</p><ul class="items">${cs.slice(0,10).map(cLi).join('')}</ul>`;return}
@@ -129,8 +129,8 @@ function plist(){const el=$('#plist');$('#pc').textContent=PTOTAL||'';
  let body='';
  if(p.kind==='commit_issue'||p.kind==='commit_theme'){const isI=p.kind==='commit_issue',lbl=isI?issueLabel:themeLabel,alts=(p.detail.top||[]).filter(a=>a.id!==p.target).slice(0,2);
   body=`<p class="q">${esc(p.message)}</p><small>${esc(String(p.committed_at||'').slice(0,10))}・<a href="${esc(p.url)}" target="_blank" rel="noopener">コミットを見る</a></small>
-  <p class="to">→ <b>${esc(lbl(p.target))}</b> に入れますか？<small>近さ ${(+p.score).toFixed(2)}</small></p>${ask('はい','いいえ')}
-  ${alts.length?`<h3>ほかの候補</h3><div class="alts">${alts.map(a=>`<button class="btn" data-dec="accept" data-id="${esc(p.id)}" data-target="${esc(a.id)}">${esc(lbl(a.id))}<small>近さ ${(+a.score).toFixed(2)}</small></button>`).join('')}</div>`:''}
+  <p class="to">→ <b>${esc(lbl(p.target))}</b> に入れますか？<small>確からしさ ${(+p.score).toFixed(2)}${p.detail.heading?'・見出し「'+esc(p.detail.heading)+'」':''}</small></p>${ask('はい','いいえ')}
+  ${alts.length?`<h3>ほかの候補</h3><div class="alts">${alts.map(a=>`<button class="btn" data-dec="accept" data-id="${esc(p.id)}" data-target="${esc(a.id)}">${esc(lbl(a.id))}<small>確からしさ ${(+a.score).toFixed(2)}</small></button>`).join('')}</div>`:''}
   <h3>テーマを選んで入れる</h3><select data-assign="${esc(p.subject)}" data-id="${esc(p.id)}"><option value="">選ぶ…</option>${Object.keys(TH).map(k=>`<option value="${esc(k)}">${esc(themeLabel(k))}</option>`).join('')}</select>`}
  else if(p.kind==='new_cluster'){const ms=(p.detail.members||[]).map(sha=>M.commits.find(c=>sha.startsWith(c.sha))).filter(Boolean);
   body=`<p class="q">「${esc(p.detail.label)}」など ${(p.detail.members||[]).length}件のまとまり</p><ul class="items">${ms.slice(0,5).map(c=>`<li>${esc(c.m)}<small>${c.d}</small></li>`).join('')}</ul>
@@ -141,12 +141,12 @@ let reloadT=0;function reloadSoon(){clearTimeout(reloadT);reloadT=setTimeout(asy
 function settle(id){const n=PENDING.length;PENDING=PENDING.filter(p=>p.id!==id);if(PENDING.length<n){PTOTAL=Math.max(0,PTOTAL-1);PDONE++}plist();reloadSoon()}
 function pct(x){return Math.round(x*100)+'%'}
 async function runEval(){say('答え合わせ中…');const e=await api('/api/eval');say('');
- const tbl=s=>`<div class="scroll"><table><tr><th>しきい値</th><th>件数</th><th>カバー</th><th>当たり</th></tr>${s.filter((r,i)=>i%2===0).map(r=>`<tr><td>${r.threshold.toFixed(2)}</td><td>${r.covered}</td><td>${pct(r.coverage)}</td><td>${pct(r.precision)}</td></tr>`).join('')}</table></div>`;
- $('#elist').innerHTML=`<h2>答え合わせ（正解 ${e.groundTruth}件）</h2><p class="sub">${esc(e.note)}</p>
- <h3>課題を当てる：1位が正解 ${pct(e.issue.top1Accuracy)}</h3><p class="sub">目安：自動 ${e.issue.suggestedAuto??'—'}・確認待ち ${e.issue.suggestedAsk??'—'}</p>${tbl(e.issue.sweep)}
- <h3>テーマを当てる：1位が正解 ${pct(e.theme.top1Accuracy)}</h3><p class="sub">目安：自動 ${e.theme.suggestedAuto??'—'}・確認待ち ${e.theme.suggestedAsk??'—'}</p>${tbl(e.theme.sweep)}
+ const tbl=(s,nr)=>`<div class="scroll"><table><tr><th>確からしさ</th><th>件数</th><th>カバー</th><th>当たり</th>${nr?'<th>ほぼ</th>':''}</tr>${s.map(r=>`<tr><td>${r.threshold.toFixed(2)}</td><td>${r.covered}</td><td>${pct(r.coverage)}</td><td>${pct(r.precision)}</td>${nr?`<td>${pct(r.nearPrecision)}</td>`:''}</tr>`).join('')}</table></div>`;
+ $('#elist').innerHTML=`<h2>答え合わせ（正解 ${e.groundTruth}件）</h2><p class="sub">方式：${esc(e.method)}。${esc(e.note)}</p>
+ <h3>課題を当てる：1位が正解 ${pct(e.issue.top1Accuracy)}・ほぼ正解 ${pct(e.issue.nearAccuracy)}</h3><p class="sub">前の方式（課題の文との近さ）は ${pct(e.oldIssueTop1)}。「ほぼ」は親子・兄弟・関係のある課題に当たったもの。目安：自動 ${e.issue.suggestedAuto??'—'}・確認待ち ${e.issue.suggestedAsk??'—'}</p>${tbl(e.issue.sweep,1)}
+ <h3>テーマを当てる：1位が正解 ${pct(e.theme.top1Accuracy)}</h3><p class="sub">目安：自動 ${e.theme.suggestedAuto??'—'}・確認待ち ${e.theme.suggestedAsk??'—'}</p>${tbl(e.theme.sweep,0)}
  <div class="row"><button class="btn p" id="applyEval">この目安をしきい値にする</button></div>
- <h3>外れた例</h3><ul class="items">${e.misses.map(m=>`<li>${esc(m.message)}<small>正解 ${esc(m.truth)}・推定 ${esc(m.guess)}（${m.score}）</small></li>`).join('')||'<li>ありません</li>'}</ul>`;
+ <h3>外れた例</h3><ul class="items">${e.misses.map(m=>`<li>${esc(m.message)}<small>正解 ${esc(m.truth)}・推定 ${esc(m.guess)}（${m.score}）${m.near?'・ほぼ正解':''}</small></li>`).join('')||'<li>ありません</li>'}</ul>`;
  $('#applyEval').onclick=async()=>{const b={};if(e.issue.suggestedAuto)b.issue_auto=e.issue.suggestedAuto;if(e.issue.suggestedAsk)b.issue_ask=e.issue.suggestedAsk;if(e.theme.suggestedAuto)b.theme_auto=e.theme.suggestedAuto;if(e.theme.suggestedAsk)b.theme_ask=e.theme.suggestedAsk;
   await api('/api/settings',{method:'POST',body:JSON.stringify(b)});say('しきい値を保存しました。提案を計算し直します…');await api('/api/suggest',{method:'POST'});await load();say('計算し直しました')}}
 function view(){document.querySelectorAll('.tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===VIEW));['map','pending','eval'].forEach(v=>$('#v-'+v).hidden=v!==VIEW);if(VIEW==='map')draw();if(VIEW==='pending')plist()}
