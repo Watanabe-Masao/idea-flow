@@ -25,7 +25,7 @@ async function load(env: Env, a: Record<string, unknown>, span = 21): Promise<Ma
   if (!v.catalog) throw new Error(`${repo} には機能の一覧（カタログ）がありません`);
   const at = v.sync?.prs_at ? Date.parse(v.sync.prs_at) : 0;
   if (a.refresh || Date.now() - at > 30 * 60 * 1000) {
-    try { await syncMap(env, repo, at ? 2 : 4); v = await mapView(env, repo, span); } catch { /* 手元の分で答える */ }
+    try { const u = await syncMap(env, repo, { mode: 'update' }); if (!u.busy && !u.backfillDone) await syncMap(env, repo, { mode: 'backfill', pages: 2 }); v = await mapView(env, repo, span); } catch { /* 手元の分で答える */ }
   }
   return v as MapData;
 }
@@ -36,9 +36,12 @@ const issueLine = (d: MapData, i: MapData['issues'][number]) =>
 
 export async function mapAction(env: Env, action: string, a: Record<string, unknown>): Promise<string> {
   if (action === 'sync') {
-    const repo = repoOf(a); let n = 0, done = false;
-    for (let k = 0; k < 4 && !done; k++) { const x = await syncMap(env, repo, 4); n += x.prs; done = x.backfillDone; }
-    return `${repo} を GitHub から読み直しました（PR ${n}件${done ? '・過去までさかのぼり済み' : '・さかのぼりの途中'}）。`;
+    const repo = repoOf(a);
+    const u = await syncMap(env, repo, { mode: 'update' });
+    if (u.busy) return `${repo} はいま別の読み込みの途中です。少し待ってから読んでください（保存済みの地図はそのまま読めます）。`;
+    let b = 0, done = u.backfillDone;
+    for (let k = 0; k < 4 && !done; k++) { const x = await syncMap(env, repo, { mode: 'backfill', pages: 4 }); if (x.busy) break; b += x.backfilled; done = x.backfillDone; }
+    return `${repo} を GitHub から読み直しました。最近の更新 ${u.updated}件${u.caughtUp ? '（前回まで追いついた）' : '（まだ続きあり。次の読み直しで続きから）'}・Issue ${u.issues}件${u.issuesMore ? '（1000件で止めた）' : ''}・さかのぼり ${b}件${done ? '（過去まで済み）' : '（途中）'}。`;
   }
   if (action === 'rules') {
     const repo = repoOf(a), cat = catalogOf(repo);

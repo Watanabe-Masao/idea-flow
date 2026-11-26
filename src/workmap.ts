@@ -102,46 +102,74 @@ async function graphql<T>(env: Env, query: string, variables: Record<string, unk
 const PR_Q = `query($o:String!,$n:String!,$after:String,$dir:OrderDirection!,$field:IssueOrderField!){repository(owner:$o,name:$n){pullRequests(states:MERGED,first:50,after:$after,orderBy:{field:$field,direction:$dir}){pageInfo{hasNextPage endCursor} nodes{number title url mergedAt updatedAt body files(first:100){nodes{path}} closingIssuesReferences(first:10){nodes{number}}}}}}`;
 type PrPage = { repository: { pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { number: number; title: string; url: string; mergedAt: string; updatedAt?: string; body: string; files: { nodes: { path: string }[] } | null; closingIssuesReferences?: { nodes: { number: number }[] } | null }[] } } };
 
+type SyncRow = { pr_cursor: string | null; pr_done: number; prs_at: string | null; issues_at: string | null; sync_id: string | null; sync_until: string | null; upd_cursor: string | null; upd_boundary: string | null; upd_started: string | null };
+
 /**
- * 取り込み。PR は古い順に50件ずつさかのぼり（続きの位置を覚える）、毎回いちばん新しく動いた50件も読む。
- * Issue は毎回すべて読み直す（閉じた・書き直したを拾うため）。1回の呼び出しで PR は pages ページまで。
+ * 取り込み。2つを分けて行う（画面もコネクタも同じ関数を呼ぶ）。
+ * - backfill（さかのぼり）：PR を古い順に50件ずつ、pages ページ。続きの位置（pr_cursor）を覚える。Issue は読まない
+ * - update（新しく動いたもの）：PR を新しく動いた順に、前回の最終成功時刻（境界）より前のものに届くまで（1回4ページ）。
+ *   届かなかったら続きの位置と境界を保ち、次の update で続きから読む。届いた時点で最終成功時刻を進める。Issue も読み直す
+ * 重なったら：D1 のロック（sync_id、2分で期限切れ）を取れなかった方は何もしない（busy）。
+ * 書き込みはすべて「ロックがまだ自分のものなら」の条件つきなので、期限切れのあとで遅れて書こうとした古い処理は何も書けない
  */
-export async function syncMap(env: Env, repo: string, pages = 4) {
+export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | 'backfill'; pages?: number } | number = {}) {
   if (!REPO_RE.test(repo)) throw new Error('リポジトリの名前が正しくありません');
+  const o2 = typeof opt === 'number' ? { mode: 'backfill' as const, pages: opt } : opt;
+  const mode = o2.mode ?? 'update', pages = o2.pages ?? 4;
   const [o, n] = repo.split('/');
-  const st = await env.DB.prepare('SELECT * FROM map_sync WHERE repo = ?').bind(repo).first<{ pr_cursor: string | null; pr_done: number; prs_at: string | null }>();
-  let cursor = st?.pr_cursor ?? null, done = !!st?.pr_done, got = 0;
-  const now = nowIso();
+  const now = nowIso(), id = crypto.randomUUID(), until = new Date(Date.now() + 120_000).toISOString();
+  await env.DB.prepare('INSERT OR IGNORE INTO map_sync (repo, pr_done) VALUES (?, 0)').bind(repo).run();
+  await env.DB.prepare('UPDATE map_sync SET sync_id = ?, sync_until = ? WHERE repo = ? AND (sync_id IS NULL OR sync_until < ?)').bind(id, until, repo, now).run();
+  const st = await env.DB.prepare('SELECT * FROM map_sync WHERE repo = ?').bind(repo).first<SyncRow>();
+  if (st?.sync_id !== id) return { mode, busy: true, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st?.pr_done, caughtUp: false, issuesMore: false };
+  const mine = 'EXISTS (SELECT 1 FROM map_sync WHERE repo = ? AND sync_id = ?)';
   const save = (nodes: PrPage['repository']['pullRequests']['nodes']) => nodes.map(p => env.DB.prepare(
-    `INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${mine}
      ON CONFLICT(repo, number) DO UPDATE SET title = excluded.title, body = excluded.body, files = excluded.files, fetched_at = excluded.fetched_at, closes = excluded.closes`)
-    .bind(repo, p.number, p.title, p.url, p.mergedAt, p.body ?? '', JSON.stringify((p.files?.nodes ?? []).map(f => f.path)), now, JSON.stringify((p.closingIssuesReferences?.nodes ?? []).map(x => x.number))));
+    .bind(repo, p.number, p.title, p.url, p.mergedAt, p.body ?? '', JSON.stringify((p.files?.nodes ?? []).map(f => f.path)), now, JSON.stringify((p.closingIssuesReferences?.nodes ?? []).map(x => x.number)), repo, id));
   const stmts: D1PreparedStatement[] = [];
-  for (let k = 0; k < pages && !done; k++) {
-    const d = await graphql<PrPage>(env, PR_Q, { o, n, after: cursor, dir: 'ASC', field: 'CREATED_AT' });
-    const pr = d.repository.pullRequests;
-    stmts.push(...save(pr.nodes)); got += pr.nodes.length;
-    if (pr.pageInfo.endCursor) cursor = pr.pageInfo.endCursor;
-    if (!pr.pageInfo.hasNextPage) done = true;
+  const res = { mode, busy: false, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st.pr_done, caughtUp: false, issuesMore: false };
+  try {
+    if (mode === 'backfill') {
+      let cursor = st.pr_cursor, done = !!st.pr_done;
+      for (let k = 0; k < pages && !done; k++) {
+        const pr = (await graphql<PrPage>(env, PR_Q, { o, n, after: cursor, dir: 'ASC', field: 'CREATED_AT' })).repository.pullRequests;
+        stmts.push(...save(pr.nodes)); res.backfilled += pr.nodes.length;
+        if (pr.pageInfo.endCursor) cursor = pr.pageInfo.endCursor;
+        if (!pr.pageInfo.hasNextPage) done = true;
+      }
+      res.backfillDone = done;
+      stmts.push(env.DB.prepare(`UPDATE map_sync SET pr_cursor = ?, pr_done = ? WHERE repo = ? AND sync_id = ?`).bind(cursor, done ? 1 : 0, repo, id));
+    } else {
+      const boundary = st.upd_boundary ?? st.prs_at, started = st.upd_started ?? now;
+      let after = st.upd_cursor, caught = false;
+      for (let k = 0; k < 4; k++) {
+        const rp = (await graphql<PrPage>(env, PR_Q, { o, n, after, dir: 'DESC', field: 'UPDATED_AT' })).repository.pullRequests;
+        stmts.push(...save(rp.nodes)); res.updated += rp.nodes.length;
+        if (!boundary || rp.nodes.some(p => (p.updatedAt ?? '') < boundary) || !rp.pageInfo.hasNextPage) { caught = true; break; }
+        after = rp.pageInfo.endCursor;
+      }
+      res.caughtUp = caught;
+      stmts.push(caught
+        ? env.DB.prepare('UPDATE map_sync SET prs_at = ?, upd_cursor = NULL, upd_boundary = NULL, upd_started = NULL WHERE repo = ? AND sync_id = ?').bind(started, repo, id)
+        : env.DB.prepare('UPDATE map_sync SET upd_cursor = ?, upd_boundary = ?, upd_started = ? WHERE repo = ? AND sync_id = ?').bind(after, boundary, started, repo, id));
+      // Issue だけを（PR を混ぜずに）100件ずつ、10ページまで。GitHub の親子（サブ Issue）の親も読む
+      const issues = await readIssues(env, o, n);
+      for (const i of issues.list)
+        stmts.push(env.DB.prepare(`INSERT OR REPLACE INTO map_issues (repo, number, open, title, body, created, updated, closed, refs, parent) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${mine}`)
+          .bind(repo, i.number, i.state === 'OPEN' ? 1 : 0, i.title, (i.body ?? '').slice(0, 4000), i.createdAt, i.updatedAt, i.closedAt, JSON.stringify(refLines(i.body ?? '')), i.parent?.number ?? null, repo, id));
+      stmts.push(env.DB.prepare('UPDATE map_sync SET issues_at = ?, issues_more = ? WHERE repo = ? AND sync_id = ?').bind(now, issues.more ? 1 : 0, repo, id));
+      res.issues = issues.list.length; res.issuesMore = issues.more;
+    }
+    // 書き込みは1回の batch に（途中で失敗したら全部取り消し）。最後にロックを外す
+    stmts.push(env.DB.prepare('UPDATE map_sync SET sync_id = NULL, sync_until = NULL WHERE repo = ? AND sync_id = ?').bind(repo, id));
+    // D1 の batch は大きすぎると断られるので100件ずつ。どの文もロックの条件つきなので、分けても古い処理は書けない
+    for (let k = 0; k < stmts.length; k += 100) await env.DB.batch(stmts.slice(k, k + 100));
+  } catch (e) {
+    await env.DB.prepare('UPDATE map_sync SET sync_id = NULL, sync_until = NULL WHERE repo = ? AND sync_id = ?').bind(repo, id).run();
+    throw e;
   }
-  // 新しく動いた PR：前回読んだ時刻より前のものに届くまで、50件ずつ（4ページまで）
-  let after: string | null = null;
-  for (let k = 0; k < 4; k++) {
-    const rp: PrPage['repository']['pullRequests'] = (await graphql<PrPage>(env, PR_Q, { o, n, after, dir: 'DESC', field: 'UPDATED_AT' })).repository.pullRequests;
-    stmts.push(...save(rp.nodes));
-    const reached = !st?.prs_at || rp.nodes.some(p => (p.updatedAt ?? '') < st.prs_at!);
-    if (reached || !rp.pageInfo.hasNextPage) break;
-    after = rp.pageInfo.endCursor;
-  }
-  // Issue だけを（PR を混ぜずに）100件ずつ、10ページまで。GitHub の親子（サブ Issue）の親も読む
-  const issues = await readIssues(env, o, n);
-  for (const i of issues.list)
-    stmts.push(env.DB.prepare('INSERT OR REPLACE INTO map_issues (repo, number, open, title, body, created, updated, closed, refs, parent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(repo, i.number, i.state === 'OPEN' ? 1 : 0, i.title, (i.body ?? '').slice(0, 4000), i.createdAt, i.updatedAt, i.closedAt, JSON.stringify(refLines(i.body ?? '')), i.parent?.number ?? null));
-  stmts.push(env.DB.prepare('INSERT INTO map_sync (repo, pr_cursor, pr_done, issues_at, prs_at, issues_more) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(repo) DO UPDATE SET pr_cursor = excluded.pr_cursor, pr_done = excluded.pr_done, issues_at = excluded.issues_at, prs_at = excluded.prs_at, issues_more = excluded.issues_more')
-    .bind(repo, cursor, done ? 1 : 0, now, now, issues.more ? 1 : 0));
-  for (let k = 0; k < stmts.length; k += 50) await env.DB.batch(stmts.slice(k, k + 50));
-  return { prs: got, backfillDone: done, issues: issues.list.length, issuesMore: issues.more };
+  return res;
 }
 
 type IssueNode = { number: number; state: string; title: string; body: string | null; createdAt: string; updatedAt: string; closedAt: string | null; parent?: { number: number } | null };
