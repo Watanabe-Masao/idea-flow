@@ -27,7 +27,7 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       const sections = (await env.DB.prepare('SELECT heading, line, md FROM rule_sections WHERE doc = ? ORDER BY line').bind(doc.id).all()).results;
       return json({ doc, items, sections });
     }
-    if (req.method === 'GET' && p === '/api/map') return json(await mapView(env, url.searchParams.get('repo') ?? '', Math.min(60, Math.max(7, Number(url.searchParams.get('span')) || 21))));
+    if (req.method === 'GET' && p === '/api/map') { const t0 = Date.now(); const v = await mapView(env, url.searchParams.get('repo') ?? '', Math.min(60, Math.max(7, Number(url.searchParams.get('span')) || 21))); return json({ ...v, took: Date.now() - t0 }); } // took：計測（#44）
     if (req.method === 'GET' && p === '/api/rules/files') return json(await listFiles(env, url.searchParams.get('repo') ?? ''));
     if (req.method === 'GET' && p === '/api/selftest') {
       const v = await embedMany(env, ['満月の物語：ページ送り', '予報の履歴の取り込み']);

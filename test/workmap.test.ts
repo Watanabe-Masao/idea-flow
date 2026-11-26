@@ -70,6 +70,7 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
     const u = await syncMap(env, 'o/r', { mode: 'update' });
     assert.deepEqual([u.updated, u.issues, u.caughtUp], [2, 3, true]);
     assert.equal(gql, 4); // さかのぼり1・さかのぼり1（残り2件）・最近の更新1・Issue 1
+    assert.equal(a.calls + b.calls + u.calls, 4); // 計測（#44）の回数が、実際の問い合わせと合う
   } finally { globalThis.fetch = real; }
 
   const v = await mapView(env, 'o/r', 21, '2026-11-27') as any;
