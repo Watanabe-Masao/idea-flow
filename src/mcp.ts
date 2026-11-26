@@ -1,30 +1,22 @@
 // Claude のコネクタ（MCP、Streamable HTTP）。会話の Claude が、決まりの見える化の結果を読んで人と相談するための入口。
 // いまは読むだけ（GitHub にもアプリのデータにも書き込まない）。合言葉は URL の /mcp/<MCP_TOKEN>。
 import type { Env } from './types.ts';
-import { rulesView, xray } from './rules.ts';
+import { rulesView } from './rules.ts';
 import { LIST, PLAIN_APPLIES } from './diagnosis.ts';
-import { addComment, contractText, propose, requests as changeRequests, scopeTree, type Op } from './scopes.ts';
 import { embedMany, loadVectors } from './embed.ts';
-import { consultFor } from './consult.ts';
-import { exportPreview, projectInstruction } from './export.ts';
-import { activityView } from './activity.ts';
 import { dot } from './vec.ts';
 import { safeEqual } from './util.ts';
 
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 const INSTRUCTIONS = `（道具は idea_flow ひとつを使う。action="help" でできることを確かめる。ほかの道具は古い会話のために残しているもの）
-idea-flow は、リポジトリの CLAUDE.md・ROLE.md・SKILL.md・決まりの文書を「決まりの単位（条項）」に分け、どこに効いているか、どんな問題があるかを見える化する道具です。
-- これは人と Claude が相談するための道具です。決めるのは人です。見つかった問題は、事実（どの文書の何行目か、どう読まれるか）と、あなたの見立て（なぜ問題か、直し方の案、直したときの副作用）を分けて伝えてください。
-- あなたが変えられるのは「提案」だけです（propose_scope_change で変更リクエストを出す）。反映するかは人がアプリで承認して決めます。リポジトリの中身は変えられません。直し方の案は、人が確かめられるように具体的に書いてください。
-- 範囲の木：決まりの文書を範囲（例：画面、満月の物語）に付けると、その範囲と下の範囲に効きます。横の範囲には効きません。例外で、ある文書のある見出しの決まりを、その範囲（と下）だけ外せます。
-- 人に伝えるときは、まず結論（rules_overview の診断書）から、ふだんの言葉で。件数や一覧は聞かれたら出す。道具の内側の言葉（finding の種類名など）は使わない。
+idea-flow は、開発の地図（機能ごとの作業・Issue の経過）と、決まりの文書の一覧・気になる所を見せる道具です。読むだけで、リポジトリにもアプリのデータにも書き込みません。
+- 決めるのは人です。見つかった問題は、事実（どの文書の何行目か、どう読まれるか）と、あなたの見立て（なぜ問題か、直し方の案、直したときの副作用）を分けて伝えてください。
+- 人に伝えるときは、まず結論から、ふだんの言葉で。件数や一覧は聞かれたら出す。道具の内側の言葉（finding の種類名など）は使わない。
 - 届き方の意味：自動で届く（CLAUDE.md・AGENTS.md）／役割として届く（ROLE.md）／場面に合えば届く（スキル。説明文で呼ばれる）／渡さないと届かない（それ以外の文書）。
 - 外から入れた決まり（ライセンスつきのスキルなど、書き換えないもの）は診断から外してある。
-- 寿命（短期／長期）はまだ人が決めていないので、すべて「未分類」です。勝手に決めず、分類の案として出してください。
-- 問題の種類（list_rule_findings の kind）：no_entry 入口が無い / unreferenced 入口からたどれない / duplicate 同じことが2か所 / definition 同じ言葉を2か所で説明 / conflict 食い違いかもしれない / temporary 終わったかもしれない / skill_overlap 似た場面で呼ばれるスキル / dead_ref もう無いファイルを指している / skill_unused 使っていない技術向けのスキル / orphan どこからも案内されていない文書。
-- 人はアプリで、決まりにピン（見直してほしい）を付けたり、書き換えたりして、変更リクエストとして出します。action="consult" で承認待ちを見て、id を渡すと相談の中身（原文・書き換えたあと・効いている範囲・意味の近い決まり）が出ます。読んだら、影響と副作用を action="comment" で返事してください。あなたからの書き換えの提案は propose の ops に {op:"edit", path, heading, item?, before, after} で出せます（反映は人の承認）。
-- dead_ref・skill_unused・orphan は「機能していない・意味がなさそう」の候補です。消す・直すを決めるのは人です。消したコミットや中身を確かめてから、残す理由がないかも一緒に考えてください。`;
+- 問題の種類（findings の kind）：no_entry 入口が無い / unreferenced 入口からたどれない / duplicate 同じことが2か所 / definition 同じ言葉を2か所で説明 / conflict 食い違いかもしれない / temporary 終わったかもしれない / skill_overlap 似た場面で呼ばれるスキル / dead_ref もう無いファイルを指している / skill_unused 使っていない技術向けのスキル / orphan どこからも案内されていない文書。
+- dead_ref・skill_unused・orphan は「機能していない・意味がなさそう」の候補です。消す・直すを決めるのは人です。`;
 
 const KIND_JA: Record<string, string> = { no_entry: '入口が無い', unreferenced: '入口からたどれない', duplicate: '同じことが2か所', definition: '同じ言葉を2か所で説明', conflict: '食い違いかもしれない', temporary: '終わったかもしれない', skill_overlap: '似た場面で呼ばれるスキル', dead_ref: 'もう無いファイルを指している', skill_unused: '使っていない技術向けのスキル', orphan: 'どこからも案内されていない' };
 const APPLIES_JA = PLAIN_APPLIES;
@@ -56,36 +48,6 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
-    name: 'xray_scene',
-    description: '場面のレントゲン。ある場面（例「予報ビューに比較表を足す」「絵本の8Pの下絵」）で、Claude に何が届くかを層ごとに返す：自動で届く／参照で届く／場面で呼ばれそうなスキル／場面に関係するのに届かない決まり。作業を始める前や、決まりの範囲を相談するときに使う。',
-    inputSchema: { type: 'object', properties: { repo: { type: 'string' }, scene: { type: 'string', description: 'これからする作業や話題を一文で' }, scope: { type: 'string', description: '範囲の key（指定すると、その範囲の決まりも届くものとして数える）' } }, required: ['repo', 'scene'], additionalProperties: false },
-    annotations: { readOnlyHint: true },
-  },
-  {
-    name: 'read_scopes',
-    description: '範囲の木（範囲ごとに付けた文書と例外）と、出ている変更リクエスト（承認待ち・決まったもの）を読む。',
-    inputSchema: { type: 'object', properties: { repo: { type: 'string' } }, required: ['repo'], additionalProperties: false },
-    annotations: { readOnlyHint: true },
-  },
-  {
-    name: 'read_scope_contract',
-    description: 'その範囲で Claude に渡す内容（守る文書・使わない部分・範囲外）を読む。その範囲の作業を始める前に使う。',
-    inputSchema: { type: 'object', properties: { repo: { type: 'string' }, scope: { type: 'string', description: '範囲の key（read_scopes で見られる）' } }, required: ['repo', 'scope'], additionalProperties: false },
-    annotations: { readOnlyHint: true },
-  },
-  {
-    name: 'propose_scope_change',
-    description: '範囲の木の変更リクエストを出す（反映はしない。人がアプリで承認したら反映）。ops の例：{"op":"add_scope","key":"screen","name":"画面","parent":"root"}／{"op":"attach","scope":"screen","path":"docs/design-system.md"}／{"op":"add_exception","scope":"moon","path":"docs/design-system.md","heading":"2. 色","why":"絵本は独自の色"}。ほかに rename_scope・move_scope・remove_scope・detach・remove_exception。全体の範囲の key は root。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        repo: { type: 'string' }, title: { type: 'string', description: '何を変えるかを一言で' }, reason: { type: 'string', description: 'なぜ変えるか・人と相談した内容・副作用の見立て' },
-        ops: { type: 'array', items: { type: 'object' }, description: '変更の中身（1〜60件）' },
-      },
-      required: ['repo', 'title', 'reason', 'ops'], additionalProperties: false,
-    },
-  },
-  {
     name: 'search_rules',
     description: '意味の近い決まりを探す。「この話題の決まりはどこに散らばっているか」「この変更で影響しそうな決まりはどれか」を調べるときに使う。',
     inputSchema: { type: 'object', properties: { query: { type: 'string' }, repo: { type: 'string' }, limit: { type: 'number', description: '初期値 10、最大 30' } }, required: ['query'], additionalProperties: false },
@@ -102,23 +64,14 @@ const ACTIONS: Record<string, { tool: string; summary: string }> = {
   overview: { tool: 'rules_overview', summary: '診断書（結論・なぜ困るか・次の一手）。args: repo?, docs?' },
   findings: { tool: 'list_rule_findings', summary: '問題の一覧。args: repo?, kind?, limit?, offset?' },
   read_doc: { tool: 'read_rule_doc', summary: '文書を見出しごとに行番号つきで。args: repo, path, heading?, offset?, limit?' },
-  xray: { tool: 'xray_scene', summary: '場面のレントゲン。args: repo, scene, scope?' },
-  scopes: { tool: 'read_scopes', summary: '範囲の木と変更リクエスト。args: repo' },
-  contract: { tool: 'read_scope_contract', summary: 'その範囲で Claude に渡す内容。args: repo, scope' },
-  propose: { tool: 'propose_scope_change', summary: '範囲の木の変更リクエストを出す（反映は人の承認）。args: repo, title, reason, ops' },
   search: { tool: 'search_rules', summary: '意味の近い決まりを探す。args: query, repo?, limit?' },
-  consult: { tool: 'consult', summary: '人のピン・書き換え・範囲の変更の相談。args: repo?（承認待ちの一覧）／id（その変更リクエストの相談の中身。原文・書き換えたあと・効いている範囲・意味の近い決まり）' },
-  activity: { tool: 'activity', summary: '作業の記録：マージした PR ごとに、変えたファイル・範囲・関係する決まり・Claude の申告（確かめた決まり／自分で判断した所／足りなかった決まり）と、気になる所。args: repo, limit?' },
-  export: { tool: 'export_preview', summary: 'CLAUDE.md に書き出す道案内（範囲の木から）と、承認した書き換えが当てはまるか。読むだけ（PR は人がアプリで出す）。args: repo' },
-  project: { tool: 'project_instruction', summary: 'claude.ai のプロジェクトに貼る指示文（その範囲の契約をコネクタで読ませる）。args: repo, scope' },
-  comment: { tool: 'comment', summary: '変更リクエストに返事を書く（影響と副作用の見立て）。args: id, text' },
 };
 const ENTRY = {
   name: 'idea_flow',
-  description: 'idea-flow のひとつの入口。action と args を渡す。まず action="help" で、いまできること（機能が増えても、この道具のまま使える）を確かめる。主な action：activity（作業の記録：Claude がしたこと）・overview（診断書）・export（CLAUDE.md に書き出す道案内）・consult（人のピンや書き換えの相談）・comment（相談への返事）・xray（場面のレントゲン）・scopes（範囲の木）・contract（範囲の契約）・propose（変更リクエストを出す。反映は人の承認）・findings・read_doc・search。',
+  description: 'idea-flow のひとつの入口。action と args を渡す。まず action="help" で、いまできることを確かめる。主な action：overview（文書の診断書）・findings・read_doc・search。',
   inputSchema: {
     type: 'object',
-    properties: { action: { type: 'string', description: 'help / activity / overview / export / project / consult / comment / findings / read_doc / xray / scopes / contract / propose / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
+    properties: { action: { type: 'string', description: 'help / overview / findings / read_doc / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
     required: ['action'], additionalProperties: false,
   },
 };
@@ -193,89 +146,12 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
       const all = items.filter(i => i.doc === d.id && (!a.heading || i.heading.includes(String(a.heading))));
       const off = num(a.offset, 0, 100000), lim = num(a.limit, 80, 200) || 80;
       const page = all.slice(off, off + lim);
-      const lines = [`${d.repo} ${d.path}「${d.title ?? ''}」［${APPLIES_JA[d.applies]}・範囲 ${d.scope || 'リポジトリ全体'}］ 決まり ${all.length}件中 ${off + 1}〜${off + page.length}`];
+      const lines = [`${d.repo} ${d.path}「${d.title ?? ''}」［${APPLIES_JA[d.applies]}・効く場所 ${d.scope || 'リポジトリ全体'}］ 決まり ${all.length}件中 ${off + 1}〜${off + page.length}`];
       if (d.description) lines.push(`説明文：${d.description}`);
       let h = '';
       for (const it of page) { if (it.heading !== h) { h = it.heading; lines.push('', `## ${h || '（見出しなし）'}`); } lines.push(`${it.line}: ${it.text}`); }
       if (off + page.length < all.length) lines.push('', `続きは offset=${off + page.length}`);
       return text(lines.join('\n'));
-    }
-    case 'xray_scene': {
-      const x = await xray(env, String(a.repo ?? ''), String(a.scene ?? ''), String(a.scope ?? ''));
-      const L = [`場面「${x.scene}」で ${x.repo} から Claude に届くもの`, '',
-        ...(x.scope ? [`■ 範囲「${x.scope.chain.join(' › ')}」で届く：${x.scope.docs.map(d => `${d.path}（${d.items}・${d.from}から）`).join('、') || 'なし'}${x.scope.excludedItems ? `／例外で外した決まり ${x.scope.excludedItems}件` : ''}`] : []),
-        `■ 自動で届く：${x.auto.length ? x.auto.map(d => `${d.path}（${d.items}）`).join('、') : 'なし（入口が無い）'}`,
-        `■ 参照で届く：${x.byRef.length ? x.byRef.map(d => `${d.path}（${d.items}）`).join('、') : 'なし'}`,
-        '■ 場面で呼ばれそうなスキル（説明文との近さ）：',
-        ...(x.skills.length ? x.skills.map(s => `  ${s.likely ? '◎' : '・'} ${s.title ?? s.path} ${s.score}${s.external ? '（外から入れたもの）' : ''}`) : ['  なし']),
-        '■ この場面に関係するのに届かない決まり（会話で渡さないと守られない）：',
-        ...(x.missing.length ? x.missing.flatMap(m => [`  ${m.path}（近さ ${m.best}）`, ...m.rules.map(r => `    ${r.line}: ${r.text}`)]) : ['  なし']),
-        '■ メモリ：まだ管理していない（メモリの使い分けは今後追加）'];
-      return text(L.join('\n'));
-    }
-    case 'read_scopes': {
-      const repo = String(a.repo ?? '');
-      const t = await scopeTree(env, repo);
-      const L: string[] = [];
-      if (!t.length) L.push('範囲の木はまだありません（最初の変更リクエストを承認すると、全体の範囲 root ができます）。');
-      const walk = (pid: string | null, depth: number) => { for (const s of t.filter(x => x.parent_id === pid)) {
-        L.push(`${'  '.repeat(depth)}- ${s.name}（key=${s.key}）${s.docs.length ? '：' + s.docs.join('、') : ''}`);
-        for (const e of s.exceptions) L.push(`${'  '.repeat(depth)}    例外：${e.path} の「${e.heading}」${e.why ? '（' + e.why + '）' : ''}`);
-        walk(s.id, depth + 1);
-      } };
-      walk(null, 0);
-      const rs = await changeRequests(env, repo);
-      if (rs.length) { L.push('', '■ 変更リクエスト'); for (const r of rs.slice(0, 10) as unknown as { id: string; title: string; status: string; by: string }[]) L.push(`- [${r.status === 'pending' ? '承認待ち' : r.status === 'accepted' ? '承認済み' : '見送り'}] ${r.title}（${r.by === 'ai' ? 'Claude' : '人'}・id=${r.id}）`); }
-      return text(L.join('\n'));
-    }
-    case 'read_scope_contract': {
-      const repo = String(a.repo ?? ''), t = await scopeTree(env, repo), s = t.find(x => x.key === a.scope);
-      if (!s) return text(`範囲 ${a.scope} がありません。read_scopes で確かめてください。`, true);
-      return text(contractText(repo, t, s.id));
-    }
-    case 'propose_scope_change': {
-      const r = await propose(env, String(a.repo ?? ''), 'ai', String(a.title ?? ''), String(a.reason ?? ''), a.ops as Op[]);
-      const pv = r.preview as { name: string; chain: string[]; isNew: boolean; starts: string[]; stops: string[]; newExceptions: string[]; droppedExceptions: string[] }[];
-      const L = [`変更リクエストを出しました（id=${r.id}）。反映するかは、人がアプリの「決まり」タブで決めます。`, '', '■ 承認したら変わること'];
-      for (const p of pv) L.push(`- ${p.chain.join(' › ')}${p.isNew ? '（新しい範囲）' : ''}${p.starts.length ? `／効き始める：${p.starts.join('、')}` : ''}${p.stops.length ? `／効かなくなる：${p.stops.join('、')}` : ''}${p.newExceptions.length ? `／例外が増える：${p.newExceptions.join('、')}` : ''}${p.droppedExceptions.length ? `／例外がなくなる：${p.droppedExceptions.join('、')}` : ''}`);
-      return text(L.join('\n'));
-    }
-    case 'consult': {
-      if (a.id) return text(await consultFor(env, String(a.id)));
-      const repos = a.repo ? [String(a.repo)] : [...new Set(v.sources.map(x => x.repo))];
-      const L: string[] = [];
-      for (const r of repos) {
-        const rs = ((await changeRequests(env, r)) as unknown as { id: string; title: string; status: string; by: string; ops: Op[]; comments: { by: string }[] }[]).filter(x => x.status === 'pending');
-        if (!rs.length) continue;
-        L.push(`■ ${r}`);
-        for (const x of rs) L.push(`- id=${x.id}「${x.title}」（${x.by === 'ai' ? 'Claude' : '人'}・ピン ${x.ops.filter(o => o.op === 'pin').length}・書き換え ${x.ops.filter(o => o.op === 'edit').length}・範囲 ${x.ops.filter(o => o.op !== 'pin' && o.op !== 'edit').length}${x.comments.some(c => c.by === 'ai') ? '・返事済み' : ''}）`);
-      }
-      return text(L.length ? L.join('\n') + '\n\nid を渡すと、その相談の中身を出します（action="consult", args: {id}）。' : '承認待ちの相談はありません。');
-    }
-    case 'activity': {
-      const x = await activityView(env, String(a.repo ?? ''), num(a.limit, 15, 40) || 15);
-      const L = [`${x.repo} の作業の記録（新しい順）：${x.counts.total}件・申告あり ${x.counts.reported}・気になる所 ${x.counts.warn}${x.hasTree ? '' : '（範囲の木がまだ無いので、範囲は出ません）'}`];
-      for (const i of x.items) {
-        L.push('', `#${i.number} ${i.title}（${i.merged_at.slice(0, 10)}）［${i.state === 'ok' ? '決まりを確かめた' : i.state === 'warn' ? '気になる所あり' : '申告なし'}］`, `  範囲：${i.scopes.join('、') || 'わからない'}／変えたファイル：${i.files.slice(0, 6).join('、')}${i.files.length > 6 ? ' ほか' : ''}`);
-        L.push(`  関係する決まり：${i.expected.map(e => `${e.path}${e.confirmed ? '✓' : ''}`).join('、') || 'なし'}`);
-        if (i.report) { if (i.report.own.length) L.push(`  自分で判断：${i.report.own.join('／')}`); if (i.report.lack.length) L.push(`  足りなかった決まり：${i.report.lack.join('／')}`); }
-        for (const o of i.outside) L.push(`  ⚠ ${o}`);
-        if (i.none) L.push('  ⚠ この範囲の決まりを1つも確かめていない');
-      }
-      return text(L.join('\n'));
-    }
-    case 'export_preview': {
-      const pv = await exportPreview(env, String(a.repo ?? ''));
-      const L = [`${pv.repo}（${pv.branch}）に書き出す内容${pv.canWrite ? '' : '（書き込み用の鍵がまだ無いので、PR は出せません）'}`, ...pv.notes];
-      for (const f of pv.files) L.push('', `■ ${f.path}${f.before == null ? '（新しいファイル）' : ''}`, f.path === 'CLAUDE.md' ? f.after.slice(f.after.indexOf('<!-- idea-flow:start -->')) : '（承認した書き換えを当てたもの）');
-      if (pv.edits.length) L.push('', '■ 承認した書き換え', ...pv.edits.map(e => `- ${e.path}「${e.heading}」：${e.ok ? '当てはまる' : '当てはまらない（' + e.reason + '）'}`));
-      if (!pv.files.length) L.push('書き出すものはありません。');
-      return text(L.join('\n'));
-    }
-    case 'project_instruction': return text(await projectInstruction(env, String(a.repo ?? ''), String(a.scope ?? '')));
-    case 'comment': {
-      const r = await addComment(env, String(a.id ?? ''), 'ai', String(a.text ?? ''));
-      return text(`返事を書きました（${r.id}）。人がアプリで読んで、承認するか決めます。`);
     }
     case 'search_rules': {
       const q = String(a.query ?? '').trim().slice(0, 300);
@@ -295,8 +171,7 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
 async function callEntry(env: Env, action: string, args: Record<string, unknown>) {
   if (action === 'help' || !ACTIONS[action]) {
     const head = action === 'help' ? '' : `「${action}」という action はありません。\n\n`;
-    return text(head + 'idea_flow の action（args は JSON のオブジェクトで渡す）\n' + Object.entries(ACTIONS).filter(([k]) => k !== 'help').map(([k, v]) => `- ${k}：${v.summary}`).join('\n')
-      + '\n\npropose の ops の例：{"op":"add_scope","key":"screen","name":"画面","parent":"root"}／{"op":"attach","scope":"screen","path":"docs/design-system.md"}／{"op":"add_exception","scope":"moon","path":"docs/design-system.md","heading":"2. 色","why":"…"}（ほかに rename_scope・move_scope・remove_scope・detach・remove_exception）', action !== 'help');
+    return text(head + 'idea_flow の action（args は JSON のオブジェクトで渡す）\n' + Object.entries(ACTIONS).filter(([k]) => k !== 'help').map(([k, v]) => `- ${k}：${v.summary}`).join('\n'), action !== 'help');
   }
   return callTool(env, ACTIONS[action].tool, args);
 }

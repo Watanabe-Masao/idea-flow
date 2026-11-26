@@ -61,10 +61,12 @@ function iline(d, i) {
   return `<div class="wm-iss"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener">#${i.number} ${esc(i.title)}</a>${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}
   <div class="m">${i.open ? '最後に動いた ' + md(i.updated) : '閉じた ' + md(i.closed)}　機能：${esc(where)}${i.nodes.length ? '　データ：' + esc(i.nodes.map(k => d.nodes[k]?.name || k).join('、')) : ''}${i.how ? '　（' + esc(i.how) + '）' : ''}</div></div>`;
 }
+// Claude の申告（PR の説明の3つの見出し）。無ければ出さない
+const report = r => !r ? '' : `<div style="font-size:13px;margin:2px 0 4px;padding:6px 8px;border-radius:8px;background:var(--soft)">${[['確かめた決まり', r.read], ['自分で判断した所', r.own], ['足りなかった決まり', r.lack]].map(([h, xs]) => `<div><b>${h}</b>：${xs.length ? xs.map(esc).join('／') : 'なし'}</div>`).join('')}</div>`;
 function detail(d, f) {
   const iss = d.issues.filter(i => i.features.includes(f.id));
   return `<div style="color:var(--ink)">${esc(f.desc)}</div><div style="margin-top:4px">入口：${esc(f.group)}　データ：${esc(f.data.map(k => d.nodes[k]?.name || k).join('、') || 'なし')}</div>
-  <h4>最近の作業</h4><ul>${f.recent.map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.n}</a> ${md(p.day)} ${esc(p.t)}</li>`).join('') || '<li>なし</li>'}</ul>
+  <h4>最近の作業</h4><ul>${f.recent.map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.n}</a> ${md(p.day)} ${esc(p.t)}${report(p.report)}</li>`).join('') || '<li>なし</li>'}</ul>
   <h4>関係する Issue</h4>${iss.length ? iss.map(i => iline(d, i)).join('') : '<div>なし</div>'}`;
 }
 function flow(d, s) {

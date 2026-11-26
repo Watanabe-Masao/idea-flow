@@ -122,6 +122,22 @@ export function prsByIssue(prs: Pr[], issueNumbers: Set<number>) {
   return out;
 }
 
+/** PR の説明から申告を読む（CLAUDE.md で書き方を決めている3つの見出し。無ければ null） */
+export function parseReport(body: string) {
+  const sec = { read: [] as string[], own: [] as string[], lack: [] as string[] };
+  const KEYS: [keyof typeof sec, RegExp][] = [['read', /確かめた決まり/], ['own', /自分で判断/], ['lack', /足りなかった決まり/]];
+  let cur: keyof typeof sec | null = null, found = false;
+  for (const raw of String(body ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const head = line.match(/^(#{1,6}\s+|\*\*)(.+?)(\*\*)?[:：]?$/);
+    if (head) { const k = KEYS.find(([, re]) => re.test(head[2])); cur = k ? k[0] : null; if (k) found = true; continue; }
+    if (!cur) continue;
+    const it = line.match(/^[-*・]\s*(.+)$/);
+    if (it && !/^(なし|特になし|無し)[。．]?$/.test(it[1].trim())) sec[cur].push(it[1].trim());
+  }
+  return found ? sec : null;
+}
+
 const addDays = (day: string, n: number) => new Date(Date.parse(day + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
 
 /**
@@ -144,7 +160,7 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
     const cnt = byDay.map(b => b.length), sum = (a: number[]) => a.reduce((s, x) => s + x, 0);
     const since7 = sum(cnt.slice(-7)), last4 = sum(cnt.slice(-4));
     return { id: f.id, group: f.group, name: f.name, desc: f.desc, data: f.data, days: cnt, byDay, total: mine.length, span: sum(cnt),
-      last: mine[0] ? jstDay(mine[0].merged_at) : null, recent: mine.slice(0, 4).map(p => ({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url })),
+      last: mine[0] ? jstDay(mine[0].merged_at) : null, recent: mine.slice(0, 4).map(p => ({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url, report: parseReport(p.body) })),
       state: since7 === 0 ? 2 : last4 >= 3 ? 0 : 1 };
   });
   const stOf = new Map(features.map(f => [f.id, f.state]));

@@ -32,7 +32,7 @@ table{border-collapse:collapse;font-size:13px;width:100%}td,th{padding:4px 6px;b
 .alts{display:flex;flex-direction:column;gap:6px;margin-top:6px}.alts .btn{text-align:left;min-height:44px;padding:6px 12px;line-height:1.35}
 </style></head><body><div class="wrap"><body><div class="wrap">
 <h1>idea-flow</h1>
-<p class="sub">Claude がしたこと（どの決まりを確かめ、何を自分で判断したか）を見えるようにする道具。決まりを範囲ごとに整理して届けるのも、ここから。</p>
+<p class="sub">開発の地図：機能ごとの作業・Issue の経過・決まりの文書を、GitHub から読んで見えるようにする道具。Claude も同じ地図を読んでから作業する。</p>
 <div class="card" id="gate" hidden><label for="tok" class="sub">合言葉（ADMIN_TOKEN）</label><div class="row"><input id="tok" type="password" autocomplete="current-password" style="flex:1"><button class="btn p" id="saveTok">使う</button></div></div>
 <div id="msg" aria-live="polite"></div>
 <section id="v-rules"><div class="card" id="rules"></div></section>
@@ -49,7 +49,7 @@ const say=t=>{$('#msg').textContent=t};
 let RV=null,RDOC=null,ROPEN=new Set(),RREPO='',RSUB='map';
 const APPLIES={always:'自動で届く',role:'役割として届く',skill:'場面に合えば届く（スキル）',referenced:'渡さないと届かない'};
 const FK={no_entry:'入口が無い',unreferenced:'入口からたどれない',duplicate:'同じことが2か所',definition:'同じ言葉を2か所で説明',conflict:'食い違いかもしれない',temporary:'終わったかもしれない',skill_overlap:'似た場面で呼ばれるスキル',dead_ref:'もう無いファイルを指している',skill_unused:'使っていない技術向けのスキル',orphan:'どこからも案内されていない'};
-async function loadRules(){RV=await api('/api/rules');await Promise.all([...new Set(RV.docs.map(d=>d.repo))].map(r=>loadScopes(r).catch(()=>{})));rulesView()}
+async function loadRules(){RV=await api('/api/rules');rulesView()}
 const ritem=id=>RV.items.find(i=>i.id===id),rdoc=id=>RV.docs.find(d=>d.id===id);
 const ghLink=(d,line)=>{const s=RV.sources.find(x=>x.repo===d.repo);return`https://github.com/${d.repo}/blob/${s?s.branch:'main'}/${d.path}${line?'#L'+line:''}`};
 const fRepo=f=>{const d=rdoc(f.a)||rdoc((ritem(f.a)||{}).doc);return d?d.repo:(f.a.includes('|')?f.a.split('|')[0]:null)};
@@ -60,53 +60,34 @@ function findingHtml(f){let body='';
  else if(f.kind==='unreferenced'){const d=rdoc(f.a);body=`<b>${esc(d.path)}</b><small>${f.detail.from&&f.detail.from.length?'参照しているのは '+f.detail.from.map(esc).join('、')+'（どれも入口から届かない）':'どの文書からも参照されていない'}</small>`}
  else if(f.kind==='dead_ref'){body=`<b>${esc(f.detail.path)}</b>${f.detail.refs.map(r=>`<p style="margin:6px 0 0"><a href="${esc(ghFile(f.a.split('|')[0],f.detail.path,r.line))}" target="_blank" rel="noopener">${r.line}行目</a>${r.heading?`「${esc(r.heading)}」`:''} → <code>${esc(r.ref)}</code> は無い<small>${r.gone?`${esc(r.gone.date)} のコミット ${esc(r.gone.sha)}「${esc(r.gone.message)}」で消えた`:'いつ消えたかは調べていません'}</small><small>${esc(r.text)}</small></p>`).join('')}`}
  else if(f.kind==='skill_unused'){body=`<b>${esc(f.detail.path)}</b><small>説明文の技術：${f.detail.techs.map(esc).join('・')}。どれも package.json に無い</small>`}
- else if(f.kind==='orphan'){body=`<a href="${esc(ghFile(f.a.split('|')[0],f.detail.path))}" target="_blank" rel="noopener"><b>${esc(f.detail.path)}</b></a><small>${f.detail.record?'記録・結果の文書。':''}${f.detail.lines}行。どの文書からも案内されず、範囲にも置かれていない</small>`}
+ else if(f.kind==='orphan'){body=`<a href="${esc(ghFile(f.a.split('|')[0],f.detail.path))}" target="_blank" rel="noopener"><b>${esc(f.detail.path)}</b></a><small>${f.detail.record?'記録・結果の文書。':''}${f.detail.lines}行。どの文書からも案内されていない</small>`}
  else if(f.kind==='skill_overlap'){const a=rdoc(f.a),b=rdoc(f.b);body=`<b>${esc(a.title||a.path)}</b> と <b>${esc(b.title||b.path)}</b><small>説明文の近さ ${(+f.score).toFixed(2)}</small>`}
  else{const A=ritem(f.a),B=f.b?ritem(f.b):null;body=`${A?ruleCard(A):''}${B?`<p class="sub" style="margin:2px 0">↕ ${f.kind==='duplicate'?'ほぼ同じ':'近い'}（近さ ${(+f.score).toFixed(2)}）</p>${ruleCard(B)}`:''}${f.kind==='temporary'?`<small>当たった言葉：「${esc(f.detail.word)}」</small>`:''}${f.kind==='definition'?`<small>同じ言葉：${f.detail.terms.map(esc).join('、')}</small>`:''}`}
  return`<li>${body}<div class="row"><input data-why="${esc(f.key)}" placeholder="理由（任意）" style="flex:1 1 160px"><button class="btn s" data-dismiss="${esc(f.key)}">問題ではない</button></div></li>`}
-let XR={};
-// 範囲の木は board.js（範囲のボード）。ここではレントゲンの範囲の選択にだけ使う
-let RS={};
-async function loadScopes(repo){RS[repo]=await api('/api/scopes?repo='+encodeURIComponent(repo))}
-const clip=(t,n=70)=>t.length>n?`<details><summary style="cursor:pointer;list-style:none">${esc(t.slice(0,n))}… <span class="sub">全文</span></summary>${esc(t)}</details>`:esc(t);
-function xrayHtml(x){const sec=(cls,t,body)=>`<div style="border:1px solid var(--line);border-left:4px solid ${cls};border-radius:0;padding:8px 10px;margin-top:8px"><b>${t}</b><div style="margin-top:4px;font-size:14px">${body}</div></div>`;
- const likely=x.skills.filter(s=>s.likely),rest=x.skills.filter(s=>!s.likely),sk=s=>`<div>${s.likely?'◎ ':'・ '}${esc(s.title||s.path)} <span class="sub">近さ ${s.score}${s.external?'・外から入れたもの':''}</span></div>`;
- const mN=x.missing.reduce((a,m)=>a+m.count,0);
- return`<p class="sub" style="margin-top:8px">場面「${esc(x.scene)}」で Claude に届くもの</p>
- ${x.scope?sec('var(--ink)',`範囲「${esc(x.scope.chain.join(' › '))}」で届く（${x.scope.docs.length}文書）`,(x.scope.docs.map(d=>esc(d.path)+`（${d.items}・${esc(d.from)}から）`).join('、')||'なし')+(x.scope.excludedItems?`<small>例外で外した決まり ${x.scope.excludedItems}件</small>`:'')):''}
- ${sec('var(--ink)',`自動で届く（${x.auto.length}文書）`,x.auto.length?x.auto.map(d=>esc(d.path)+`（${d.items}）`).join('、'):'<span style="color:var(--red)">なし（入口が無い）</span>')}
- ${sec('var(--ink)',`参照で届く（${x.byRef.length}文書）`,x.byRef.length?x.byRef.map(d=>esc(d.path)+`（${d.items}）`).join('、'):'なし')}
- ${sec('var(--mute)',`場面で呼ばれそうなスキル（${likely.length}）`,(likely.length?likely.map(sk).join(''):'<span class="sub">この場面で呼ばれそうなスキルは無し</span>')+(rest.length?`<details style="margin-top:4px"><summary class="sub" style="cursor:pointer">ほかのスキル（近い順・${rest.length}）</summary>${rest.map(sk).join('')}</details>`:''))}
- ${sec('var(--red)',`この場面に関係するのに届かない決まり（${x.missing.length}文書・${mN}件）`,x.missing.length?`<p class="sub" style="margin:0 0 4px">会話で渡さないと守られません。</p>`+x.missing.map(m=>`<div style="margin-top:8px"><b>${esc(m.path)}</b> <span class="sub">${m.count}件・いちばん近いもの ${m.best}</span>${m.rules.map(r=>`<div style="margin-top:3px;font-size:13px;color:var(--mute)">${r.line}行目：${clip(r.text)}</div>`).join('')}</div>`).join(''):'なし')}
- ${sec('var(--line)','メモリ','<span class="sub">まだ管理していません（メモリの使い分けは今後追加）</span>')}`}
 function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">読み込み中…</p>';return}
  if(RDOC){const d=rdoc(RDOC);if(!d){RDOC=null;return rulesView()}const its=RV.items.filter(i=>i.doc===d.id);
   const byH={};its.forEach(i=>(byH[i.heading||'（見出しなし）']=byH[i.heading||'（見出しなし）']||[]).push(i));
-  el.innerHTML=`<div class="row" style="margin:0"><button class="btn" data-rback="1">← 診断に戻る</button></div><h2 style="margin-top:10px">${esc(d.title||d.path)}</h2><p class="sub"><a href="${esc(ghLink(d))}" target="_blank" rel="noopener">${esc(d.path)}</a>・${APPLIES[d.applies]}・決まり ${its.length}${d.external?'・外から入れたもの':''}</p>
+  el.innerHTML=`<div class="row" style="margin:0"><button class="btn" data-rback="1">← 文書に戻る</button></div><h2 style="margin-top:10px">${esc(d.title||d.path)}</h2><p class="sub"><a href="${esc(ghLink(d))}" target="_blank" rel="noopener">${esc(d.path)}</a>・${APPLIES[d.applies]}・決まり ${its.length}${d.external?'・外から入れたもの':''}</p>
   ${d.description?`<p class="sub" style="margin-top:6px">呼ばれる場面（説明文）：${esc(d.description)}</p>`:''}
   ${Object.entries(byH).map(([h,xs])=>`<h3>${esc(h)}</h3>${xs.map(i=>{const f=RV.findings.filter(x=>x.a===i.id||x.b===i.id);return`<div class="rule" style="padding:6px 0">${esc(i.text)}${f.map(x=>` <span class="badge r">${FK[x.kind]}</span>`).join('')}<small><a href="${esc(ghLink(d,i.line))}" target="_blank" rel="noopener">${i.line}行目</a></small></div>`}).join('')}`).join('')}`;return}
  const repos=[...new Set([...RV.sources.map(s=>s.repo),...RV.docs.map(d=>d.repo)])];
  if(!RREPO||!repos.includes(RREPO))RREPO=repos.find(x=>RV.docs.some(d=>d.repo===x))||repos[0]||'';
  const head=`<div class="row" style="margin:0">${repos.length>1?`<select id="rrepo" style="flex:1 1 200px" aria-label="リポジトリ">${repos.map(x=>`<option ${x===RREPO?'selected':''}>${esc(x)}</option>`).join('')}</select>`:`<b>${esc(RREPO||'リポジトリはまだありません')}</b>`}</div>
- <div class="tabs" role="tablist" style="margin-top:8px">${[['map','地図'],['record','記録'],['board','範囲'],['diag','診断'],['xray','レントゲン']].map(([k,l])=>`<button class="tab" role="tab" data-rsub="${k}" aria-selected="${RSUB===k}">${l}</button>`).join('')}</div>`;
+ <div class="tabs" role="tablist" style="margin-top:8px">${[['map','地図'],['docs','文書']].map(([k,l])=>`<button class="tab" role="tab" data-rsub="${k}" aria-selected="${RSUB===k}">${l}</button>`).join('')}</div>`;
  if(RSUB==='map'&&RREPO){el.innerHTML=head+'<div id="rmap" style="margin-top:10px"></div>';window.WorkMap.render($('#rmap'),RREPO);return}
- if(RSUB==='record'&&RREPO){el.innerHTML=head+'<div id="ractivity" style="margin-top:10px"></div>';window.Activity.render($('#ractivity'),RREPO);return}
- if(RSUB==='board'&&RREPO){el.innerHTML=head+'<div id="rboard" style="margin-top:10px"></div>';window.Board.render($('#rboard'),RREPO);return}
- if(RSUB==='xray'&&RREPO){const r=RREPO,ds=RV.docs.filter(d=>d.repo===r),key=r.replace(/[^\w]/g,'_');
-  el.innerHTML=head+`<h2 style="margin-top:12px">場面のレントゲン</h2><p class="sub">ある場面（例：予報ビューに比較表を足す）で、Claude に何が届いて、何が届かないかを見ます。</p>
-  ${ds.length?`<div style="margin-top:8px"><div class="row" style="margin:0"><input id="xs-${key}" placeholder="場面（例：予報ビューに比較表を足す）" value="${esc((XR[r]||{}).scene||'')}" style="flex:1 1 200px">${RS[r]&&RS[r].tree.length?`<select id="xsc-${key}" style="flex:1 1 140px"><option value="">範囲を選ばない</option>${RS[r].tree.map(t=>`<option value="${esc(t.key)}" ${(XR[r]||{}).scope&&XR[r].scope.key===t.key?'selected':''}>${esc(t.name)}</option>`).join('')}</select>`:''}<button class="btn s p" data-xray="${esc(r)}">レントゲン</button></div><p id="xm-${key}" style="margin:6px 0 0;font-size:14px;color:var(--red)" aria-live="polite"></p>${XR[r]?xrayHtml(XR[r]):''}</div>`:''}`;return}
- el.innerHTML=head+`<h2 style="margin-top:12px">決まりの診断</h2><p class="sub">リポジトリの決まり（CLAUDE.md・スキル・docs など）が Claude にちゃんと届いているか、ぶつかっていないかを見ます。読むだけで、GitHub には書き込みません。</p>
+ el.innerHTML=head+`<h2 style="margin-top:12px">文書</h2><p class="sub">リポジトリの決まりの文書（CLAUDE.md・スキル・docs など）の一覧と、Claude への届き方、気になる所（重複・食い違い・古い決まり・どこからも読まれない文書）。読むだけで、GitHub には書き込みません。</p>
  ${RV.stale?`<div style="border:1px solid var(--red);border-radius:10px;padding:10px 12px;margin-top:10px"><b>診断の仕方が新しくなりました</b><p class="sub" style="margin:4px 0">下の結果は古い仕方のままです。取り込み直すと新しい診断になります。</p><div class="row">${[...new Set(RV.docs.map(d=>d.repo))].map(r=>`<button class="btn s p" data-rsync="${esc(r)}">${esc(r.split('/')[1])} を取り込み直す</button>`).join('')}</div></div>`:''}
  ${repos.filter(x=>x===RREPO||!RREPO).map(r=>{const s=RV.sources.find(x=>x.repo===r),ds=RV.docs.filter(d=>d.repo===r),dg=RV.diagnosis[r]||{conclusions:[],external:[]};const key=r.replace(/[^\w]/g,'_');
   return`<div class="card" style="margin-top:14px;padding:12px"><div class="row" style="margin:0;justify-content:space-between"><b>${esc(r)}</b><span class="sub">${s&&s.synced_at?esc(s.synced_at.slice(0,10)):'未取り込み'}</span></div>
+  <h3>文書（${ds.length}件）</h3><p class="sub" style="margin:0">押すと、見出しごとの決まりが読めます。</p>
+  <ul class="items">${[...ds].sort((a,b)=>Object.keys(APPLIES).indexOf(a.applies)-Object.keys(APPLIES).indexOf(b.applies)||a.path.localeCompare(b.path)).map(d=>`<li><div data-rdoc="${esc(d.id)}" style="cursor:pointer">${esc(d.path)}${(n=>n?` <span class="badge r">気になる所 ${n}</span>`:'')(RV.findings.filter(f=>f.a===d.id||f.b===d.id||(ritem(f.a)||{}).doc===d.id||(ritem(f.b)||{}).doc===d.id).length)}<small>${APPLIES[d.applies]}・決まり ${RV.items.filter(i=>i.doc===d.id).length}${d.external?`・外から入れたもの${d.external_by==='auto'?'（ライセンスのファイルから判定）':''}`:''}</small></div><div class="row" style="margin-top:4px"><button class="btn s" data-rext="${esc(d.repo+'|'+d.path)}" data-v2="${d.external?0:1}">${d.external?'このリポジトリの決まりとして扱う':'外から入れたもの（診断しない）にする'}</button></div></li>`).join('')}</ul>
+  <div style="margin-top:6px"><div class="row"><button class="btn s" data-rfiles="${esc(r)}">ファイルを選ぶ</button><button class="btn s p" data-rsync="${esc(r)}">取り込む</button></div><div id="rf-${key}"></div></div>
+  <h3>気になる所</h3>
   ${!ds.length?`<p class="sub" style="margin-top:8px">まだ取り込んでいません。</p>`:dg.conclusions.length?dg.conclusions.map((c,k)=>{const fs=RV.findings.filter(f=>f.kind===c.kind&&fRepo(f)===r),op=ROPEN.has(r+'|'+c.kind);
    return`<div style="border-top:1px solid var(--line);padding:12px 0 8px;margin-top:8px"><p style="margin:0;font-weight:700;font-size:17px">${k+1}. ${esc(c.title)}</p><p style="margin:4px 0" class="sub">${esc(c.why)}</p>${c.list&&c.list.length?`<ul style="margin:4px 0 0;padding-left:18px;font-size:13px;color:var(--mute)">${c.list.slice(0,3).map(l=>`<li>${esc(l)}</li>`).join('')}${c.list.length>3?`<li>ほか ${c.list.length-3}件</li>`:''}</ul>`:''}<p style="margin:6px 0"><span class="badge k">次の一手</span> ${esc(c.next)}</p>
    <button class="btn s" data-ropen="${esc(r+'|'+c.kind)}">${op?'閉じる':'詳しく見る'}</button>${op?`<ul class="items" style="margin-top:6px">${fs.slice(0,40).map(findingHtml).join('')}</ul>${fs.length>40?`<p class="sub">ほか ${fs.length-40}件</p>`:''}`:''}</div>`}).join(''):'<p style="margin-top:8px">問題は見つかっていません。</p>'}
   ${dg.external.length?`<p class="sub" style="margin-top:10px">外から入れた決まり ${dg.external.length}件（書き換えないもの）は診断から外しています。</p>`:''}
-  <details style="margin-top:10px"><summary class="sub" style="cursor:pointer;min-height:36px">文書の一覧（${ds.length}件）・取り込みの設定</summary>
-   <div class="row"><button class="btn s" data-rfiles="${esc(r)}">ファイルを選ぶ</button><button class="btn s p" data-rsync="${esc(r)}">取り込む</button></div><div id="rf-${key}"></div>
-   <ul class="items">${ds.map(d=>`<li><div data-rdoc="${esc(d.id)}" style="cursor:pointer">${esc(d.path)}<small>${APPLIES[d.applies]}・決まり ${RV.items.filter(i=>i.doc===d.id).length}${d.external?`・外から入れたもの${d.external_by==='auto'?'（ライセンスのファイルから判定）':''}`:''}</small></div><div class="row" style="margin-top:4px"><button class="btn s" data-rext="${esc(d.repo+'|'+d.path)}" data-v2="${d.external?0:1}">${d.external?'このリポジトリの決まりとして扱う':'外から入れたもの（診断しない）にする'}</button></div></li>`).join('')}</ul>
-  </details></div>`}).join('')}
+  </div>`}).join('')}
  <div class="row"><input id="newrepo" placeholder="owner/name を足す" style="flex:1 1 180px"><button class="btn s" id="addrepo">足す</button></div>
  ${RV.dismissed?`<p class="sub" style="margin-top:8px">「問題ではない」にしたもの ${RV.dismissed}件は出していません。</p>`:''}`}
 async function pickFiles(repo){const box=$('#rf-'+repo.replace(/[^\w]/g,'_'));box.innerHTML='<p class="sub">一覧を読んでいます…</p>';const r=await api('/api/rules/files?repo='+encodeURIComponent(repo));
@@ -116,10 +97,6 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  try{
  if(b.id==='saveTok'){TOK=$('#tok').value.trim();try{localStorage.setItem('idea-flow-token',TOK)}catch(_){}await load();return}
  if(b.dataset.rback){RDOC=null;rulesView();return}
- if(b.dataset.xray){const r=b.dataset.xray,k=r.replace(/[^\w]/g,'_'),inp=$('#xs-'+k),msg=$('#xm-'+k);msg.textContent='';
-  if(!inp.value.trim()){msg.textContent='場面を入れてください（例：満月の物語のページ送りに動きを付ける）';inp.focus();return}
-  b.disabled=true;b.textContent='調べています…';
-  try{const sc=$('#xsc-'+k);XR[r]=await api('/api/rules/xray?repo='+encodeURIComponent(r)+'&scene='+encodeURIComponent(inp.value)+(sc&&sc.value?'&scope='+encodeURIComponent(sc.value):''));rulesView()}catch(err){msg.textContent='調べられませんでした：'+err.message;b.disabled=false;b.textContent='レントゲン'}return}
  if(b.dataset.rsub){RSUB=b.dataset.rsub;rulesView();return}
  if(b.dataset.ropen){const k=b.dataset.ropen;ROPEN.has(k)?ROPEN.delete(k):ROPEN.add(k);rulesView();return}
  if(b.dataset.rext){const [repo,...pp]=b.dataset.rext.split('|');b.disabled=true;await api('/api/rules/external',{method:'POST',body:JSON.stringify({repo,path:pp.join('|'),external:b.dataset.v2==='1'})});await loadRules();say('変えました（次の取り込みからも効きます）');return}
@@ -131,8 +108,8 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  }catch(err){say(err.message);b.disabled=false}});
 document.addEventListener('change',e=>{if(e.target.id==='rrepo'){RREPO=e.target.value;rulesView()}});
 async function load(){try{$('#gate').hidden=true;await loadRules()}catch(e){say(e.message)}}
-// 範囲のボード（board.js）へ渡すもの
+// 地図（map.js）へ渡すもの
 window.IF={api,esc,say,rv:()=>RV,reload:()=>loadRules(),files:r=>pickFiles(r)};
 if(!TOK)$('#gate').hidden=false;else load();
 }
-</script><script src="board.js"></script><script src="activity.js"></script><script src="map.js"></script></body></html>
+</script><script src="map.js"></script></body></html>
