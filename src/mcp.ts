@@ -2,7 +2,7 @@
 // いまは読むだけ（GitHub にもアプリのデータにも書き込まない）。合言葉は URL の /mcp/<MCP_TOKEN>。
 import type { Env } from './types.ts';
 import { rulesView, xray } from './rules.ts';
-import { PLAIN_APPLIES } from './diagnosis.ts';
+import { LIST, PLAIN_APPLIES } from './diagnosis.ts';
 import { contractText, propose, requests as changeRequests, scopeTree, type Op } from './scopes.ts';
 import { embedMany, loadVectors } from './embed.ts';
 import { dot } from './vec.ts';
@@ -19,9 +19,10 @@ idea-flow は、リポジトリの CLAUDE.md・ROLE.md・SKILL.md・決まりの
 - 届き方の意味：自動で届く（CLAUDE.md・AGENTS.md）／役割として届く（ROLE.md）／場面に合えば届く（スキル。説明文で呼ばれる）／渡さないと届かない（それ以外の文書）。
 - 外から入れた決まり（ライセンスつきのスキルなど、書き換えないもの）は診断から外してある。
 - 寿命（短期／長期）はまだ人が決めていないので、すべて「未分類」です。勝手に決めず、分類の案として出してください。
-- 問題の種類（list_rule_findings の kind）：no_entry 入口が無い / unreferenced 入口からたどれない / duplicate 同じことが2か所 / definition 同じ言葉を2か所で説明 / conflict 食い違いかもしれない / temporary 終わったかもしれない / skill_overlap 似た場面で呼ばれるスキル。`;
+- 問題の種類（list_rule_findings の kind）：no_entry 入口が無い / unreferenced 入口からたどれない / duplicate 同じことが2か所 / definition 同じ言葉を2か所で説明 / conflict 食い違いかもしれない / temporary 終わったかもしれない / skill_overlap 似た場面で呼ばれるスキル / dead_ref もう無いファイルを指している / skill_unused 使っていない技術向けのスキル / orphan どこからも案内されていない文書。
+- dead_ref・skill_unused・orphan は「機能していない・意味がなさそう」の候補です。消す・直すを決めるのは人です。消したコミットや中身を確かめてから、残す理由がないかも一緒に考えてください。`;
 
-const KIND_JA: Record<string, string> = { no_entry: '入口が無い', unreferenced: '入口からたどれない', duplicate: '同じことが2か所', definition: '同じ言葉を2か所で説明', conflict: '食い違いかもしれない', temporary: '終わったかもしれない', skill_overlap: '似た場面で呼ばれるスキル' };
+const KIND_JA: Record<string, string> = { no_entry: '入口が無い', unreferenced: '入口からたどれない', duplicate: '同じことが2か所', definition: '同じ言葉を2か所で説明', conflict: '食い違いかもしれない', temporary: '終わったかもしれない', skill_overlap: '似た場面で呼ばれるスキル', dead_ref: 'もう無いファイルを指している', skill_unused: '使っていない技術向けのスキル', orphan: 'どこからも案内されていない' };
 const APPLIES_JA = PLAIN_APPLIES;
 
 const TOOLS = [
@@ -141,7 +142,7 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
         if (!ds.length) continue;
         out.push(`■ ${r} の診断（取り込み ${s?.synced_at ? s.synced_at.slice(0, 16).replace('T', ' ') + ' UTC' : 'まだ'}・文書 ${ds.length}・決まり ${items.filter(i => ds.some(d => d.id === i.doc)).length}）`);
         if (!dg.conclusions.length) out.push('  問題は見つかっていません。');
-        dg.conclusions.forEach((c, k) => out.push(`  ${k + 1}. ${c.title}`, `     なぜ困るか：${c.why}`, `     次の一手：${c.next}`, `     （詳しくは list_rule_findings kind=${c.kind}）`));
+        dg.conclusions.forEach((c, k) => out.push(`  ${k + 1}. ${c.title}`, `     なぜ困るか：${c.why}`, `     次の一手：${c.next}`, ...(c.list ?? []).slice(0, 5).map(l => `     ・${l}`), `     （詳しくは list_rule_findings kind=${c.kind}）`));
         if (dg.external.length) out.push(`  外から入れた決まり（書き換えないもの。診断から外している）：${dg.external.length}件（${dg.external.slice(0, 3).join('、')}${dg.external.length > 3 ? ' ほか' : ''}）`);
         if (a.docs) for (const d of ds) out.push(`  - ${d.path}［${APPLIES_JA[d.applies]}${d.external ? '・外から入れたもの' : ''}］決まり ${items.filter(i => i.doc === d.id).length}`);
       }
@@ -163,6 +164,9 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
         } else if (f.kind === 'unreferenced') {
           const d = v.docs.find(x => x.id === f.a)!;
           lines.push(`  ${d.repo} ${d.path}（決まり ${items.filter(i => i.doc === d.id).length}）${f.detail.from?.length ? `・参照しているのは ${f.detail.from.join('、')}（どれも入口から届かない）` : '・どこからも参照されていない'}`);
+        } else if (f.kind in LIST) {
+          for (const l of LIST[f.kind](f)) lines.push(`  ${l}`);
+          if (f.kind === 'dead_ref') for (const r of f.detail.refs) lines.push(`    ${r.line}: ${r.text}`);
         } else if (f.kind === 'skill_overlap') {
           for (const id of [f.a, f.b]) { const d = v.docs.find(x => x.id === id); if (d) lines.push(`  ${d.path}：${d.description ?? ''}`); }
         } else {
