@@ -3,6 +3,7 @@
 import type { Env } from './types.ts';
 import { rulesView, xray } from './rules.ts';
 import { PLAIN_APPLIES } from './diagnosis.ts';
+import { contractText, propose, requests as changeRequests, scopeTree, type Op } from './scopes.ts';
 import { embedMany, loadVectors } from './embed.ts';
 import { dot } from './vec.ts';
 import { safeEqual } from './util.ts';
@@ -11,7 +12,8 @@ const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 const INSTRUCTIONS = `idea-flow は、リポジトリの CLAUDE.md・ROLE.md・SKILL.md・決まりの文書を「決まりの単位（条項）」に分け、どこに効いているか、どんな問題があるかを見える化する道具です。
 - これは人と Claude が相談するための道具です。決めるのは人です。見つかった問題は、事実（どの文書の何行目か、どう読まれるか）と、あなたの見立て（なぜ問題か、直し方の案、直したときの副作用）を分けて伝えてください。
-- いまの道具は読むだけです。リポジトリやアプリの中身を変えることはできません。直し方の案は、人が確かめられるように具体的に（どの文書のどの行を、どう変えるか）書いてください。
+- あなたが変えられるのは「提案」だけです（propose_scope_change で変更リクエストを出す）。反映するかは人がアプリで承認して決めます。リポジトリの中身は変えられません。直し方の案は、人が確かめられるように具体的に書いてください。
+- 範囲の木：決まりの文書を範囲（例：画面、満月の物語）に付けると、その範囲と下の範囲に効きます。横の範囲には効きません。例外で、ある文書のある見出しの決まりを、その範囲（と下）だけ外せます。
 - 人に伝えるときは、まず結論（rules_overview の診断書）から、ふだんの言葉で。件数や一覧は聞かれたら出す。道具の内側の言葉（finding の種類名など）は使わない。
 - 届き方の意味：自動で届く（CLAUDE.md・AGENTS.md）／役割として届く（ROLE.md）／場面に合えば届く（スキル。説明文で呼ばれる）／渡さないと届かない（それ以外の文書）。
 - 外から入れた決まり（ライセンスつきのスキルなど、書き換えないもの）は診断から外してある。
@@ -50,8 +52,32 @@ const TOOLS = [
   {
     name: 'xray_scene',
     description: '場面のレントゲン。ある場面（例「予報ビューに比較表を足す」「絵本の8Pの下絵」）で、Claude に何が届くかを層ごとに返す：自動で届く／参照で届く／場面で呼ばれそうなスキル／場面に関係するのに届かない決まり。作業を始める前や、決まりの範囲を相談するときに使う。',
-    inputSchema: { type: 'object', properties: { repo: { type: 'string' }, scene: { type: 'string', description: 'これからする作業や話題を一文で' } }, required: ['repo', 'scene'], additionalProperties: false },
+    inputSchema: { type: 'object', properties: { repo: { type: 'string' }, scene: { type: 'string', description: 'これからする作業や話題を一文で' }, scope: { type: 'string', description: '範囲の key（指定すると、その範囲の決まりも届くものとして数える）' } }, required: ['repo', 'scene'], additionalProperties: false },
     annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'read_scopes',
+    description: '範囲の木（範囲ごとに付けた文書と例外）と、出ている変更リクエスト（承認待ち・決まったもの）を読む。',
+    inputSchema: { type: 'object', properties: { repo: { type: 'string' } }, required: ['repo'], additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'read_scope_contract',
+    description: 'その範囲で Claude に渡す内容（守る文書・使わない部分・範囲外）を読む。その範囲の作業を始める前に使う。',
+    inputSchema: { type: 'object', properties: { repo: { type: 'string' }, scope: { type: 'string', description: '範囲の key（read_scopes で見られる）' } }, required: ['repo', 'scope'], additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'propose_scope_change',
+    description: '範囲の木の変更リクエストを出す（反映はしない。人がアプリで承認したら反映）。ops の例：{"op":"add_scope","key":"screen","name":"画面","parent":"root"}／{"op":"attach","scope":"screen","path":"docs/design-system.md"}／{"op":"add_exception","scope":"moon","path":"docs/design-system.md","heading":"2. 色","why":"絵本は独自の色"}。ほかに rename_scope・move_scope・remove_scope・detach・remove_exception。全体の範囲の key は root。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string' }, title: { type: 'string', description: '何を変えるかを一言で' }, reason: { type: 'string', description: 'なぜ変えるか・人と相談した内容・副作用の見立て' },
+        ops: { type: 'array', items: { type: 'object' }, description: '変更の中身（1〜60件）' },
+      },
+      required: ['repo', 'title', 'reason', 'ops'], additionalProperties: false,
+    },
   },
   {
     name: 'search_rules',
@@ -136,8 +162,9 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
       return text(lines.join('\n'));
     }
     case 'xray_scene': {
-      const x = await xray(env, String(a.repo ?? ''), String(a.scene ?? ''));
+      const x = await xray(env, String(a.repo ?? ''), String(a.scene ?? ''), String(a.scope ?? ''));
       const L = [`場面「${x.scene}」で ${x.repo} から Claude に届くもの`, '',
+        ...(x.scope ? [`■ 範囲「${x.scope.chain.join(' › ')}」で届く：${x.scope.docs.map(d => `${d.path}（${d.items}・${d.from}から）`).join('、') || 'なし'}${x.scope.excludedItems ? `／例外で外した決まり ${x.scope.excludedItems}件` : ''}`] : []),
         `■ 自動で届く：${x.auto.length ? x.auto.map(d => `${d.path}（${d.items}）`).join('、') : 'なし（入口が無い）'}`,
         `■ 参照で届く：${x.byRef.length ? x.byRef.map(d => `${d.path}（${d.items}）`).join('、') : 'なし'}`,
         '■ 場面で呼ばれそうなスキル（説明文との近さ）：',
@@ -145,6 +172,33 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
         '■ この場面に関係するのに届かない決まり（会話で渡さないと守られない）：',
         ...(x.missing.length ? x.missing.flatMap(m => [`  ${m.path}（近さ ${m.best}）`, ...m.rules.map(r => `    ${r.line}: ${r.text}`)]) : ['  なし']),
         '■ メモリ：まだ管理していない（メモリの使い分けは今後追加）'];
+      return text(L.join('\n'));
+    }
+    case 'read_scopes': {
+      const repo = String(a.repo ?? '');
+      const t = await scopeTree(env, repo);
+      const L: string[] = [];
+      if (!t.length) L.push('範囲の木はまだありません（最初の変更リクエストを承認すると、全体の範囲 root ができます）。');
+      const walk = (pid: string | null, depth: number) => { for (const s of t.filter(x => x.parent_id === pid)) {
+        L.push(`${'  '.repeat(depth)}- ${s.name}（key=${s.key}）${s.docs.length ? '：' + s.docs.join('、') : ''}`);
+        for (const e of s.exceptions) L.push(`${'  '.repeat(depth)}    例外：${e.path} の「${e.heading}」${e.why ? '（' + e.why + '）' : ''}`);
+        walk(s.id, depth + 1);
+      } };
+      walk(null, 0);
+      const rs = await changeRequests(env, repo);
+      if (rs.length) { L.push('', '■ 変更リクエスト'); for (const r of rs.slice(0, 10) as unknown as { id: string; title: string; status: string; by: string }[]) L.push(`- [${r.status === 'pending' ? '承認待ち' : r.status === 'accepted' ? '承認済み' : '見送り'}] ${r.title}（${r.by === 'ai' ? 'Claude' : '人'}・id=${r.id}）`); }
+      return text(L.join('\n'));
+    }
+    case 'read_scope_contract': {
+      const repo = String(a.repo ?? ''), t = await scopeTree(env, repo), s = t.find(x => x.key === a.scope);
+      if (!s) return text(`範囲 ${a.scope} がありません。read_scopes で確かめてください。`, true);
+      return text(contractText(repo, t, s.id));
+    }
+    case 'propose_scope_change': {
+      const r = await propose(env, String(a.repo ?? ''), 'ai', String(a.title ?? ''), String(a.reason ?? ''), a.ops as Op[]);
+      const pv = r.preview as { name: string; chain: string[]; isNew: boolean; starts: string[]; stops: string[]; newExceptions: string[]; droppedExceptions: string[] }[];
+      const L = [`変更リクエストを出しました（id=${r.id}）。反映するかは、人がアプリの「決まり」タブで決めます。`, '', '■ 承認したら変わること'];
+      for (const p of pv) L.push(`- ${p.chain.join(' › ')}${p.isNew ? '（新しい範囲）' : ''}${p.starts.length ? `／効き始める：${p.starts.join('、')}` : ''}${p.stops.length ? `／効かなくなる：${p.stops.join('、')}` : ''}${p.newExceptions.length ? `／例外が増える：${p.newExceptions.join('、')}` : ''}${p.droppedExceptions.length ? `／例外がなくなる：${p.droppedExceptions.join('、')}` : ''}`);
       return text(L.join('\n'));
     }
     case 'search_rules': {
