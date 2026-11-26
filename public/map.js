@@ -163,17 +163,19 @@ function clusterView(d, s) {
   const prMap = new Map();
   for (const i of iss) for (const l of i.links) if (l.type === 'pr' && (s.cand || l.kind !== 'candidate')) { const p = prMap.get(l.n) || { ...l, edges: [] }; p.edges.push({ i: i.number, kind: l.kind, ev: l.evidence }); prMap.set(l.n, p); }
   const prs = [...prMap.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-24);
+  const W = Math.max(300, (EL.clientWidth || 360) - 4);
+  const sel = s.csel, active = new Set();
+  if (sel) { active.add(sel); if (sel.startsWith('i')) { const n = +sel.slice(1); prs.forEach(p => p.edges.some(e => e.i === n) && active.add('p' + p.n)); iss.find(i => i.number === n)?.links.forEach(l => l.type === 'issue' && active.add('i' + l.n)); } else { const p = prs.find(x => 'p' + x.n === sel); p?.edges.forEach(e => active.add('i' + e.i)); } }
+  const dim = id => sel && !active.has(id);
+  let lines = '', nodes = '', H;
+  if (W >= 640) {
   const W = Math.max(320, (EL.clientWidth || 360) - 4), gap = 44, colW = Math.floor((W - 20 - gap) / 2), H0 = 52, NH = 50, G = 8;
   const lx = 14, rx = lx + colW + gap, yP = k => H0 + k * (NH + G);
   // Issue は、つながる PR の高さの平均に置く（重ならないように下へずらす）。線が短く、交わりにくくなる
   const want = iss.map((i, k) => { const ys = prs.map((p, kp) => p.edges.some(e => e.i === i.number) ? yP(kp) : null).filter(v => v != null); return { k, y: ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : H0 + k * (NH + G) }; }).sort((a, b) => a.y - b.y);
   const pos = []; let last = H0 - NH - G;
   for (const w of want) { const y = Math.max(w.y, last + NH + G); pos[w.k] = y; last = y; }
-  const yI = k => pos[k], H = Math.max(last, yP(prs.length - 1)) + NH + 8;
-  const sel = s.csel, active = new Set();
-  if (sel) { active.add(sel); if (sel.startsWith('i')) { const n = +sel.slice(1); prs.forEach(p => p.edges.some(e => e.i === n) && active.add('p' + p.n)); iss.find(i => i.number === n)?.links.forEach(l => l.type === 'issue' && active.add('i' + l.n)); } else { const p = prs.find(x => 'p' + x.n === sel); p?.edges.forEach(e => active.add('i' + e.i)); } }
-  const dim = id => sel && !active.has(id);
-  let lines = '';
+  const yI = k => pos[k]; H = Math.max(last, yP(prs.length - 1)) + NH + 8;
   const ln = (x1, y1, x2, y2, kind, on) => { const [, c, da] = LK[kind]; const mx = (x1 + x2) / 2; return `<path d="M${x1} ${y1} C${mx} ${y1},${mx} ${y2},${x2} ${y2}" fill="none" stroke="${sel && on && kind === 'ref' ? 'var(--ink)' : c}" stroke-width="${sel && on ? 2.6 : 1.4}" stroke-dasharray="${da}" opacity="${sel && !on ? .1 : .85}"/>`; };
   // 機能 → Issue（左の柱）
   lines += `<path d="M${lx - 6} 40 V${yI(iss.length - 1) + NH / 2}" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="1 4" fill="none"/>`;
@@ -186,16 +188,40 @@ function clusterView(d, s) {
     const y1 = yI(k) + NH / 2, y2 = yI(k2) + NH / 2, kind = l.kind === 'ref' ? 'ref' : 'parent', on = !sel || sel === 'i' + i.number || sel === 'i' + l.n, [, c] = LK[kind];
     lines += `<path d="M${lx + 10} ${y1} C${lx - 12} ${y1},${lx - 12} ${y2},${lx + 10} ${y2}" fill="none" stroke="${c}" stroke-width="${kind === 'parent' ? 3 : 1.4}" opacity="${sel && !on ? .12 : .9}"/>`; }));
   const node = (id, x, y, w, h, cls, sub, txt) => `<div class="wm-cn ${cls}${sel === id ? ' on' : ''}${dim(id) ? ' dim' : ''}" data-cn="${id}" role="button" tabindex="0" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px"><small>${sub}</small><span>${esc(txt)}</span></div>`;
-  let nodes = node('f', lx, 4, W - lx - 6, 36, 'f', `機能・${ST[f.state]}・開いている Issue ${all.filter(i => i.open).length}`, f.name);
+  nodes = node('f', lx, 4, W - lx - 6, 36, 'f', `機能・${ST[f.state]}・開いている Issue ${all.filter(i => i.open).length}`, f.name);
   iss.forEach((i, k) => nodes += node('i' + i.number, lx, yI(k), colW, NH, (i.open ? 'open' : '') + (i.stale ? ' stale' : '') + (i.features.includes(f.id) ? '' : ' other'), `Issue #${i.number}・${i.open ? '開いている' : '閉じた ' + md(i.closed)}`, i.title));
   prs.forEach((p, k) => nodes += node('p' + p.n, rx, yP(k), colW, NH, p.edges.every(e => e.kind === 'candidate') ? 'other' : '', `PR #${p.n}・${md(p.day)}`, p.title));
+  } else {
+    // スマホ：縦に1列（機能 → Issue → PR）。線は左の余白を通る折れ線で、Issue ごとに通り道を分ける
+    const lanes = Math.min(10, Math.max(1, iss.length)), x0 = 10 + lanes * 6, cw = W - x0 - 2, NH = 78, G = 8;
+    const laneX = k => 4 + (k % lanes) * 6;
+    const yF = 2, yIs = 70, yI = k => yIs + 18 + k * (NH + G), yPs = yI(iss.length) + 6, yP = k => yPs + 18 + k * (NH + G);
+    H = yP(prs.length) + 4;
+    const on = (a, b) => !sel || (sel === a && active.has(b)) || (sel === b && active.has(a));
+    const path = (y1, y2, x, kind, hot) => { const [, c, da] = LK[kind]; return `<path d="M${x0} ${y1} H${x} V${y2} H${x0}" fill="none" stroke="${sel && hot && kind === 'ref' ? 'var(--ink)' : c}" stroke-width="${kind === 'parent' ? 3 : sel && hot ? 2.4 : 1.6}" stroke-dasharray="${da}" opacity="${sel && !hot ? .1 : .9}"/>`; };
+    lines += `<path d="M${x0} ${yF + 22} H2 V${yI(iss.length - 1) + 22}" fill="none" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="1 4"/>`;
+    iss.forEach((i, k) => { if (i.features.includes(f.id)) lines += `<path d="M2 ${yI(k) + 22} H${x0}" fill="none" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="1 4"/>`; });
+    prs.forEach((p, kp) => p.edges.forEach(e => { const ki = iss.findIndex(i => i.number === e.i); if (ki >= 0) lines += path(yI(ki) + 30 + (kp % 3) * 3, yP(kp) + 28, laneX(ki), e.kind, on('i' + e.i, 'p' + p.n)); }));
+    const seen = new Set();
+    iss.forEach((i, k) => i.links.forEach(l => { if (l.type !== 'issue') return; const k2 = iss.findIndex(x => x.number === l.n); const key = [i.number, l.n].sort().join('-'); if (k2 < 0 || seen.has(key)) return; seen.add(key);
+      lines += path(yI(k) + 40, yI(k2) + 40, laneX(Math.min(k, k2)) + 2, l.kind === 'ref' ? 'ref' : 'parent', on('i' + i.number, 'i' + l.n)); }));
+    const badge = kinds => [...new Set(kinds)].map(k => `<em style="font-style:normal;font-size:10.5px;padding:1px 6px;border-radius:5px;margin-right:4px;border:1px ${k === 'candidate' ? 'dashed' : 'solid'} ${LK[k === 'child' ? 'parent' : k][1]};color:var(--mute)">${LK[k === 'child' ? 'parent' : k][0]}</em>`).join('');
+    const card = (id, y, cls, head, right, title, kinds) => `<div class="wm-cn ${cls}${sel === id ? ' on' : ''}${dim(id) ? ' dim' : ''}" data-cn="${id}" role="button" tabindex="0" style="left:${x0}px;top:${y}px;width:${cw}px;height:${NH}px;font-size:13.5px;padding:5px 9px"><small style="display:flex;justify-content:space-between;gap:6px"><b>${head}</b><span>${right}</span></small><span style="font-weight:600;line-height:1.35">${esc(title)}</span><div style="margin-top:2px;white-space:nowrap;overflow:hidden">${kinds}</div></div>`;
+    nodes += `<div class="wm-cn f${dim('f') ? ' dim' : ''}" data-cn="f" role="button" tabindex="0" style="left:${x0}px;top:${yF}px;width:${cw}px;height:46px"><small>機能・${ST[f.state]}・開いている Issue ${all.filter(i => i.open).length}/${all.length}</small><span>${esc(f.name)}</span></div>`;
+    nodes += `<div class="sub" style="position:absolute;left:${x0}px;top:${yIs}px;font-weight:600">Issue（${iss.length}）</div><div class="sub" style="position:absolute;left:${x0}px;top:${yPs}px;font-weight:600">PR（${prs.length}）</div>`;
+    iss.forEach((i, k) => nodes += card('i' + i.number, yI(k), (i.open ? 'open' : '') + (i.stale ? ' stale' : '') + (i.features.includes(f.id) ? '' : ' other'), `Issue #${i.number}`, i.open ? (i.stale ? '古くなっている候補' : '開いている') : '閉じた ' + md(i.closed), i.title,
+      badge([...(i.features.includes(f.id) ? ['catalog'] : []), ...i.links.filter(l => l.type === 'issue' && l.kind !== 'ref').map(l => 'parent')])));
+    prs.forEach((p, k) => nodes += card('p' + p.n, yP(k), p.edges.every(e => e.kind === 'candidate') ? 'other' : '', `PR #${p.n}`, 'マージ ' + md(p.day), p.title, badge(p.edges.map(e => e.kind))));
+  }
   // 選んだものの中身（根拠）
   let det = '<p class="sub" style="margin-top:8px">四角を押すと、つながりの根拠が出ます。</p>';
   if (sel && sel.startsWith('i')) { const i = d.issues.find(x => x.number === +sel.slice(1)); if (i) det = `<div class="wm-det" style="border-top:1px solid var(--ink);border-radius:10px;margin-top:8px"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">Issue #${i.number} ${esc(i.title)}</a><div>立てた ${md(i.created)}${i.closed ? '・閉じた ' + md(i.closed) : '・開いている'}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>${i.links.filter(l => s.cand || l.kind !== 'candidate').map(l => `<div class="wm-link"><span class="wm-kind${l.kind === 'candidate' ? ' k' : ''}">${LK[l.kind === 'child' ? 'parent' : l.kind][0]}${l.kind === 'child' ? '（先）' : l.kind === 'parent' ? '（元）' : ''}</span>${l.type === 'pr' ? 'PR' : 'Issue'} #${l.n} ${esc(l.title)}${l.evidence.map(e => `<div class="ev">根拠：${esc(e)}</div>`).join('')}</div>`).join('')}</div>`; }
   if (sel && sel.startsWith('p')) { const p = prs.find(x => 'p' + x.n === sel); if (p) det = `<div class="wm-det" style="border-top:1px solid var(--ink);border-radius:10px;margin-top:8px"><a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">PR #${p.n} ${esc(p.title)}</a><div>マージ ${md(p.day)}</div>${p.edges.map(e => `<div class="wm-link"><span class="wm-kind${e.kind === 'candidate' ? ' k' : ''}">${LK[e.kind === 'child' ? 'parent' : e.kind][0]}</span>Issue #${e.i}${e.ev.map(x => `<div class="ev">根拠：${esc(x)}</div>`).join('')}</div>`).join('')}</div>`; }
-  return `<p class="sub" style="margin-top:8px">機能ごとに、その機能の Issue（左）と、つながる PR（右）を線で結びます。線の種類はつながりの種類です。破線の四角は、ほかの機能の Issue か、推測だけでつながる PR。</p>
-  <div class="wm-chips">${per.map(x => `<button class="wm-chip" data-cl="${esc(x.f.id)}" aria-pressed="${x.f.id === s.cl}">${esc(x.f.name.replace(/（.*）/, ''))} ${x.iss.filter(i => i.open).length}/${x.iss.length}</button>`).join('')}</div>
-  <div class="row" style="margin-top:8px"><button class="btn" data-cand="1" style="min-height:36px">${s.cand ? '推測を隠す' : '推測も出す'}</button><span class="sub">PR は新しい24件まで</span></div>
+  s._sheet = W < 640 && sel ? det : null;
+  if (s._sheet) det = '';
+  return `<p class="sub" style="margin-top:8px">機能ごとに、その機能の Issue と、つながる PR を線で結びます。線の種類はつながりの種類です。破線の四角は、ほかの機能の Issue か、推測だけでつながる PR。</p>
+  <div class="wm-chips" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch">${per.map(x => `<button class="wm-chip" style="flex:none" data-cl="${esc(x.f.id)}" aria-pressed="${x.f.id === s.cl}">${esc(x.f.name.replace(/（.*）/, ''))} ${x.iss.filter(i => i.open).length}/${x.iss.length}</button>`).join('')}</div>
+  <div class="row" style="margin-top:8px"><button class="btn" data-cand="1" style="min-height:36px">${s.cand ? '推測を隠す' : '推測も出す'}</button><span class="sub">PR は新しい24件まで。四角を押すと根拠が出ます</span></div>
   <div class="wm-lk">${Object.values(LK).map(([l, c, da]) => `<span><i style="border-top-color:${c};border-top-style:${da ? (da === '1 4' ? 'dotted' : 'dashed') : 'solid'}"></i>${l}</span>`).join('')}</div>
   <div class="wm-cl" style="height:${H}px"><svg viewBox="0 0 ${W} ${H}" aria-hidden="true">${lines}</svg>${nodes}</div>${det}`;
 }
@@ -209,7 +235,8 @@ function draw() {
     ${s.note ? `<p class="sub" style="margin-top:6px">${esc(s.note)}</p>` : ''}`;
   if (!d) { EL.innerHTML = `<div class="wm">${top}<p class="sub" style="margin-top:8px">読み込み中…</p></div>`; return; }
   if (!d.catalog) { EL.innerHTML = `<div class="wm">${top}<p class="sub" style="margin-top:8px">このリポジトリには、まだ機能の一覧（カタログ）がありません。<code>src/catalogs.ts</code> に足すと、地図が作られます。</p></div>`; return; }
-  if (s.view === 'cluster') { EL.innerHTML = `<div class="wm">${top}${clusterView(d, s)}</div>`; return; }
+  if (s.view === 'cluster') { EL.innerHTML = `<div class="wm">${top}${clusterView(d, s)}</div>`; sheet(s._sheet); return; }
+  sheet(null);
   if (s.view === 'issue') { EL.innerHTML = `<div class="wm">${top}${issueView(d, s)}</div>`; return; }
   const c = d.counts, n = d.days.length, step = n > 30 ? 14 : 7;
   let rows = '', g = '';
@@ -241,6 +268,15 @@ function draw() {
   <h3>データの流れ</h3><p class="sub">左はデータ、右は機能。赤い破線は、貯めているのにどの画面も使っていないデータ。押すと、つながる先が光ります。</p>
   ${nodeNote}<div class="fig" style="margin-top:8px">${flow(d, s)}</div>
   <p class="sub" style="margin-top:8px">取り込み：PR ${d.sync?.pr_done ? 'すべて' : '途中まで'}・最後に読んだ ${d.sync?.prs_at ? md(d.sync.prs_at.slice(0, 10)) + ' ' + d.sync.prs_at.slice(11, 16) + '（UTC）' : 'まだ'}</p></div>`;
+}
+
+// スマホでは、選んだものの根拠を画面の下から出す（下までスクロールしなくてよい）
+let sh = null;
+function sheet(html) {
+  if (!html) { if (sh) sh.hidden = true; return; }
+  if (!sh) { sh = document.createElement('div'); sh.className = 'wm-bar'; sh.style.cssText = 'background:var(--panel);color:var(--ink);border:1px solid var(--ink);max-height:55vh;padding:6px 12px 12px'; document.body.appendChild(sh);
+    sh.addEventListener('click', e => { if (e.target.closest('.x')) { st(REPO).csel = null; draw(); } }); }
+  sh.innerHTML = `<button class="x" aria-label="閉じる">×</button>${html.replace('border-top:1px solid var(--ink);border-radius:10px;margin-top:8px', 'border:0;padding:0;margin:0')}`; sh.hidden = false; sh.scrollTop = 0;
 }
 
 let bar = null;
