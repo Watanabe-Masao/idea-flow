@@ -25,6 +25,13 @@ export function dirsOf(all: string[]) {
   return s;
 }
 
+/** 文書の中に書かれたパス（作られる物は除く） */
+export function pathsIn(text: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.matchAll(PATH_RE)) { const r = m[1].replace(/[.,:;)\]）。、]+$/, ''); if (r && !BUILT.test(r)) out.add(r); }
+  return [...out];
+}
+
 /** 文書の中の、リポジトリに無いパス（行・見出しつき） */
 export function deadRefs(text: string, all: Set<string>, dirs: Set<string>): DeadRef[] {
   const out: DeadRef[] = [], seen = new Set<string>();

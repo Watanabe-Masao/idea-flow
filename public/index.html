@@ -32,7 +32,7 @@ table{border-collapse:collapse;font-size:13px;width:100%}td,th{padding:4px 6px;b
 .alts{display:flex;flex-direction:column;gap:6px;margin-top:6px}.alts .btn{text-align:left;min-height:44px;padding:6px 12px;line-height:1.35}
 </style></head><body><div class="wrap"><body><div class="wrap">
 <h1>idea-flow</h1>
-<p class="sub">リポジトリの決まり（CLAUDE.md・スキル・docs）を、範囲ごとに整理して Claude に届ける道具。決めるのは人で、Claude は相談相手。</p>
+<p class="sub">Claude がしたこと（どの決まりを確かめ、何を自分で判断したか）を見えるようにする道具。決まりを範囲ごとに整理して届けるのも、ここから。</p>
 <div class="card" id="gate" hidden><label for="tok" class="sub">合言葉（ADMIN_TOKEN）</label><div class="row"><input id="tok" type="password" autocomplete="current-password" style="flex:1"><button class="btn p" id="saveTok">使う</button></div></div>
 <div id="msg" aria-live="polite"></div>
 <section id="v-rules"><div class="card" id="rules"></div></section>
@@ -46,7 +46,7 @@ async function api(path,opt={}){const r=await fetch(path,{...opt,headers:{'conte
  if(r.status===401){$('#gate').hidden=false;throw new Error('合言葉を入れてください')}const b=await r.json();if(!r.ok)throw new Error(b.error||r.status);return b}
 const say=t=>{$('#msg').textContent=t};
 // ── 決まりの診断（#7・#8） ──
-let RV=null,RDOC=null,ROPEN=new Set(),RREPO='',RSUB='board';
+let RV=null,RDOC=null,ROPEN=new Set(),RREPO='',RSUB='record';
 const APPLIES={always:'自動で届く',role:'役割として届く',skill:'場面に合えば届く（スキル）',referenced:'渡さないと届かない'};
 const FK={no_entry:'入口が無い',unreferenced:'入口からたどれない',duplicate:'同じことが2か所',definition:'同じ言葉を2か所で説明',conflict:'食い違いかもしれない',temporary:'終わったかもしれない',skill_overlap:'似た場面で呼ばれるスキル',dead_ref:'もう無いファイルを指している',skill_unused:'使っていない技術向けのスキル',orphan:'どこからも案内されていない'};
 async function loadRules(){RV=await api('/api/rules');await Promise.all([...new Set(RV.docs.map(d=>d.repo))].map(r=>loadScopes(r).catch(()=>{})));rulesView()}
@@ -88,7 +88,8 @@ function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">�
  const repos=[...new Set([...RV.sources.map(s=>s.repo),...RV.docs.map(d=>d.repo)])];
  if(!RREPO||!repos.includes(RREPO))RREPO=repos.find(x=>RV.docs.some(d=>d.repo===x))||repos[0]||'';
  const head=`<div class="row" style="margin:0">${repos.length>1?`<select id="rrepo" style="flex:1 1 200px" aria-label="リポジトリ">${repos.map(x=>`<option ${x===RREPO?'selected':''}>${esc(x)}</option>`).join('')}</select>`:`<b>${esc(RREPO||'リポジトリはまだありません')}</b>`}</div>
- <div class="tabs" role="tablist" style="margin-top:8px">${[['board','範囲'],['diag','診断'],['xray','レントゲン']].map(([k,l])=>`<button class="tab" role="tab" data-rsub="${k}" aria-selected="${RSUB===k}">${l}</button>`).join('')}</div>`;
+ <div class="tabs" role="tablist" style="margin-top:8px">${[['record','記録'],['board','範囲'],['diag','診断'],['xray','レントゲン']].map(([k,l])=>`<button class="tab" role="tab" data-rsub="${k}" aria-selected="${RSUB===k}">${l}</button>`).join('')}</div>`;
+ if(RSUB==='record'&&RREPO){el.innerHTML=head+'<div id="ractivity" style="margin-top:10px"></div>';window.Activity.render($('#ractivity'),RREPO);return}
  if(RSUB==='board'&&RREPO){el.innerHTML=head+'<div id="rboard" style="margin-top:10px"></div>';window.Board.render($('#rboard'),RREPO);return}
  if(RSUB==='xray'&&RREPO){const r=RREPO,ds=RV.docs.filter(d=>d.repo===r),key=r.replace(/[^\w]/g,'_');
   el.innerHTML=head+`<h2 style="margin-top:12px">場面のレントゲン</h2><p class="sub">ある場面（例：予報ビューに比較表を足す）で、Claude に何が届いて、何が届かないかを見ます。</p>
@@ -133,4 +134,4 @@ async function load(){try{$('#gate').hidden=true;await loadRules()}catch(e){say(
 window.IF={api,esc,say,rv:()=>RV,reload:()=>loadRules(),files:r=>pickFiles(r)};
 if(!TOK)$('#gate').hidden=false;else load();
 }
-</script><script src="board.js"></script></body></html>
+</script><script src="board.js"></script><script src="activity.js"></script></body></html>
