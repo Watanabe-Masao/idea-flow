@@ -187,6 +187,25 @@ export function parseReport(body: string) {
   return found ? sec : null;
 }
 
+/**
+ * 書き方の守り具合（その期間にマージした PR と、立てた Issue）。CLAUDE.md の「書き方」の決まりに合わせる。
+ * - PR：題の頭が機能の名前か別名（「満月の物語：…」）／Issue を番号で書いている（閉じた・参照）／申告の3つの見出し
+ * - Issue：本文に「機能：」の行／「閉じる条件：」の行
+ */
+export function writingCheck(cat: Catalog, prs: Pr[], issues: { number: number; title: string; body: string }[], links: Map<number, Link[]>) {
+  const names = new Set(cat.features.flatMap(f => [f.name, f.name.replace(/（.*）/, ''), ...f.aliases]));
+  const titled = (t: string) => { const h = t.split(/[：:]/)[0].trim(); return h !== t.trim() && (names.has(h) || [...names].some(n => n && h.startsWith(n))); };
+  const linkedPrs = new Set([...links.values()].flatMap(L => L.filter(l => l.type === 'pr' && l.kind !== 'candidate').map(l => l.n)));
+  const P = prs.map(p => ({ n: p.number, t: p.title, url: p.url, miss: [!titled(p.title) && '題の頭に機能名', !linkedPrs.has(p.number) && '関係する Issue の番号', !parseReport(p.body) && '申告の3つの見出し'].filter(Boolean) as string[] }));
+  const I = issues.map(i => ({ n: i.number, t: i.title, miss: [!/^\s*(?:[-*]\s*)?\**機能\**\s*[:：]/m.test(i.body) && '本文の「機能：」', !/閉じる条件\s*[:：]/.test(i.body) && '本文の「閉じる条件：」'].filter(Boolean) as string[] }));
+  const cnt = (xs: { miss: string[] }[], m: string) => xs.filter(x => !x.miss.includes(m)).length;
+  return {
+    prs: P.length, prTitle: cnt(P, '題の頭に機能名'), prLinked: cnt(P, '関係する Issue の番号'), prReport: cnt(P, '申告の3つの見出し'),
+    issues: I.length, issueFeature: cnt(I, '本文の「機能：」'), issueClose: cnt(I, '本文の「閉じる条件：」'),
+    misses: [...P.filter(x => x.miss.length).map(x => ({ type: 'pr' as const, ...x })), ...I.filter(x => x.miss.length).map(x => ({ type: 'issue' as const, url: '', ...x }))].slice(0, 30),
+  };
+}
+
 const addDays = (day: string, n: number) => new Date(Date.parse(day + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
 
 /**
@@ -224,8 +243,9 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
     return { number: i.number, open: !!i.open, title: i.title, created: jstDay(i.created), updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale, links: links.get(i.number) ?? [] };
   });
   const inSpan = prs.filter(p => idx.has(jstDay(p.merged_at)));
+  const writing = writingCheck(cat, inSpan, rows.filter(i => idx.has(jstDay(i.created))), links);
   const unmatched = inSpan.filter(p => !of.get(p.number)!.length).map(p => ({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url }));
-  return { repo, catalog: true as const, sync, today, days, features, nodes: cat.nodes, issues, unmatched,
+  return { repo, catalog: true as const, sync, today, days, features, nodes: cat.nodes, issues, unmatched, writing,
     counts: { prs: inSpan.length, building: features.filter(f => f.state === 0).length, settled: features.filter(f => f.state === 1).length, stopped: features.filter(f => f.state === 2).length,
       openIssues: issues.filter(i => i.open).length, stale: issues.filter(i => i.stale).length, unused: Object.values(cat.nodes).filter(nd => nd.note === '画面なし').length } };
 }

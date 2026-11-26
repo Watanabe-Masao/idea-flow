@@ -63,6 +63,15 @@ function iline(d, i) {
   return `<div class="wm-iss"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener">#${i.number} ${esc(i.title)}</a>${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}
   <div class="m">${i.open ? '最後に動いた ' + md(i.updated) : '閉じた ' + md(i.closed)}　機能：${esc(where)}${i.nodes.length ? '　データ：' + esc(i.nodes.map(k => d.nodes[k]?.name || k).join('、')) : ''}${i.how ? '　（' + esc(i.how) + '）' : ''}</div></div>`;
 }
+// 書き方の守り具合（CLAUDE.md の「書き方」）。足りないものの一覧は開いたときだけ
+function writing(w) {
+  if (!w || (!w.prs && !w.issues)) return '';
+  const bar = (k, n, l) => { const p = n ? Math.round(k / n * 100) : 0; return `<div style="display:grid;grid-template-columns:11em minmax(0,1fr) 4.5em;gap:8px;align-items:center;font-size:13px;margin-top:4px"><span>${l}</span><span style="height:8px;border-radius:4px;background:var(--line);overflow:hidden"><i style="display:block;height:100%;width:${p}%;background:${p >= 80 ? '#2fae69' : p >= 50 ? '#c98500' : 'var(--red2)'}"></i></span><span style="text-align:right;font-variant-numeric:tabular-nums">${n ? `${k}/${n}` : '—'}</span></div>`; };
+  return `<h3>書き方の守り具合</h3><p class="sub">この期間の PR ${w.prs}件・立てた Issue ${w.issues}件。書き方がそろうほど、地図のつながりが確かになります。</p>
+  ${bar(w.prTitle, w.prs, 'PR：題の頭に機能名')}${bar(w.prLinked, w.prs, 'PR：Issue の番号')}${bar(w.prReport, w.prs, 'PR：申告の3つの見出し')}${bar(w.issueFeature, w.issues, 'Issue：「機能：」')}${bar(w.issueClose, w.issues, 'Issue：「閉じる条件：」')}
+  ${w.misses.length ? `<details style="margin-top:6px"><summary class="sub">足りないもの（新しい${w.misses.length}件）</summary><ul style="font-size:13px;padding-left:1.2em">${w.misses.map(m => `<li><a href="${GH(REPO)}/${m.type === 'pr' ? 'pull' : 'issues'}/${m.n}" target="_blank" rel="noopener">${m.type === 'pr' ? 'PR' : 'Issue'} #${m.n}</a> ${esc(m.t)}<br><span class="sub">足りない：${esc(m.miss.join('・'))}</span></li>`).join('')}</ul></details>` : ''}`;
+}
+
 // Claude の申告（PR の説明の3つの見出し）。無ければ出さない
 const report = r => !r ? '' : `<div style="font-size:13px;margin:2px 0 4px;padding:6px 8px;border-radius:8px;background:var(--soft)">${[['確かめた決まり', r.read], ['自分で判断した所', r.own], ['足りなかった決まり', r.lack]].map(([h, xs]) => `<div><b>${h}</b>：${xs.length ? xs.map(esc).join('／') : 'なし'}</div>`).join('')}</div>`;
 function detail(d, f) {
@@ -158,6 +167,7 @@ function draw() {
   <p class="sub" style="margin-top:8px">機能の一覧と、マージした PR（変えたファイル）・Issue から自動で作ります。読むだけで、リポジトリには書きません。今日（${md(d.today)}）までの${n}日。</p>
   <div class="wm-sum"><div class="hot"><b>${c.stopped}</b><span>止まっている機能（直近7日に作業なし）</span></div><div><b>${c.building}／${c.settled}</b><span>作っている／落ち着いた</span></div>
   <div><b>${c.openIssues}</b><span>開いている Issue（うち古い候補 ${c.stale}）</span></div><div><b style="color:var(--red2)">${c.unused}</b><span>貯めているが画面なし</span></div></div>
+  ${writing(d.writing)}
   <h3>機能ごとの稼働</h3><p class="sub">1マス＝1日（マージした PR の数）。マスを指でなぞると、その日の作業が下に出ます。名前を押すと中身が開きます。</p>
   <div class="wm-legend"><span><span class="wm-sw" style="background:var(--line)"></span>0</span><span><span class="wm-sw" style="background:var(--h1)"></span>1</span><span><span class="wm-sw" style="background:var(--h2)"></span>2〜3</span><span><span class="wm-sw" style="background:var(--h3)"></span>4 以上</span></div>
   <div class="wm-chips">${[['すべて', -1], ...ST.map((l, i) => [l, i])].map(([l, i]) => `<button class="wm-chip" data-filt="${i}" aria-pressed="${s.filt === i}">${l}</button>`).join('')}</div>

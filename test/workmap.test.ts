@@ -88,6 +88,8 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
   assert.deepEqual(i(7).nodes, ['sWarn']);
   assert.equal(i(9).open, false);
   assert.deepEqual(v.unmatched.map((p: any) => p.n), [6]);
+  // 書き方：作り物の PR は題に機能名も番号も申告も無い。Issue は本文が空（期間に立てた3件）
+  assert.deepEqual({ ...v.writing, misses: v.writing.misses.length }, { prs: 5, prTitle: 0, prLinked: 0, prReport: 0, issues: 3, issueFeature: 0, issueClose: 0, misses: 8 });
   assert.deepEqual(v.counts, { prs: 5, building: 1, settled: 1, stopped: 1, openIssues: 2, stale: 1, unused: 1 });
   const { mapAction } = await import('../src/mcpmap.ts');
   const real2 = globalThis.fetch; globalThis.fetch = (async () => { throw new Error('読み直さないはず'); }) as typeof fetch;
@@ -127,4 +129,18 @@ test('PR の説明から申告を読む（見出しの名前で。なしは空�
   assert.deepEqual(r, { read: ['`docs/moon.md`「動き」', '`docs/design.md`「2.1 文字」'], own: ['折る位置を空白にした'], lack: [] });
   assert.equal(parseReport('ふつうの説明だけ'), null);
   assert.deepEqual(parseReport('**確かめた決まり**\n- docs/a.md\n')!.read, ['docs/a.md']);
+});
+
+test('書き方の守り具合：題の頭・Issue の番号・申告、Issue の「機能：」「閉じる条件：」', async () => {
+  const { writingCheck, issueLinks, refLines } = await import('../src/workmap.ts');
+  const prs = [
+    { number: 5, title: '満月の物語：止める', url: 'u5', merged_at: '2026-11-20T00:00:00Z', files: [], closes: [], body: '関連 #3\n## 確かめた決まり\n- なし\n## 決まりになく、自分で判断した所\n- なし\n## 足りなかった決まり\n- なし' },
+    { number: 6, title: '直した', url: 'u6', merged_at: '2026-11-20T00:00:00Z', files: [], closes: [], body: '' },
+  ];
+  const issues = [{ number: 3, title: '満月の物語：残り', body: '機能：満月の物語\n閉じる条件：12月の満月が出る', open: true, created: '2026-11-19T00:00:00Z', closed: null, features: ['story'], refs: [] as { n: number; line: string }[] },
+    { number: 4, title: 'あれ', body: 'メモ', open: true, created: '2026-11-19T00:00:00Z', closed: null, features: [], refs: [] }];
+  const links = issueLinks('o/r', issues.map(i => ({ ...i, refs: refLines(i.body) })), prs.map(p => ({ ...p, features: [] })));
+  const w = writingCheck(CAT, prs, issues, links);
+  assert.deepEqual([w.prs, w.prTitle, w.prLinked, w.prReport, w.issues, w.issueFeature, w.issueClose], [2, 1, 1, 1, 2, 1, 1]);
+  assert.deepEqual(w.misses.map(m => [m.n, m.miss.length]), [[6, 3], [4, 2]]);
 });

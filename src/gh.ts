@@ -1,5 +1,4 @@
-// GitHub とのやり取り。読むときは読む用の鍵（GITHUB_TOKEN）、届かなければ書き込み用の鍵（GITHUB_WRITE_TOKEN）で読み直す。
-// 書くとき（ブランチ・ファイル・PR）は書き込み用の鍵だけを使う。マージはしない（人がする）。
+// GitHub とのやり取り（読むだけ）。読む用の鍵（GITHUB_TOKEN）で届かなければ、もう1つの鍵（GITHUB_WRITE_TOKEN）で読み直す。
 import type { Env } from './types.ts';
 
 export const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
@@ -17,14 +16,6 @@ export async function gh<T>(env: Env, path: string, raw = false): Promise<T> {
     res = await fetch('https://api.github.com' + path, { headers: ghHeaders(env.GITHUB_WRITE_TOKEN, raw) });
   if (!res.ok) throw new Error(`GitHub: ${res.status} ${(await res.text()).slice(0, 200)}`);
   return (raw ? await res.text() : await res.json()) as T;
-}
-
-/** 書く（書き込み用の鍵だけ） */
-export async function ghWrite<T>(env: Env, method: string, path: string, body: unknown): Promise<T> {
-  if (!env.GITHUB_WRITE_TOKEN) throw new Error('書き出しには、書き込み用の鍵（GITHUB_WRITE_TOKEN）が要ります。Cloudflare の「変数とシークレット」に追加してください');
-  const res = await fetch('https://api.github.com' + path, { method, headers: { ...ghHeaders(env.GITHUB_WRITE_TOKEN), 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  if (!res.ok) throw new Error(`GitHub（書き込み）: ${res.status} ${(await res.text()).slice(0, 200)}`);
-  return await res.json() as T;
 }
 
 /**
@@ -54,12 +45,4 @@ async function readManyWith(token: string, repo: string, branch: string, paths: 
     part.forEach((p, k) => { const t = r[`f${k}`]?.text; if (typeof t === 'string') out.set(p, t); });
   }
   return out;
-}
-
-/** UTF-8 の文字列を base64 に（GitHub のファイル書き込み用） */
-export function b64(s: string) {
-  const bytes = new TextEncoder().encode(s);
-  let bin = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(bin);
 }

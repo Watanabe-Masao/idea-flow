@@ -1,6 +1,7 @@
 // 機能の一覧（カタログ）。地図はこれと、マージした PR・Issue から自動で作る。
 // files は、その機能のファイルに当たる正規表現。aliases は PR・Issue の題の頭の言葉（「満月の物語：…」）。
 // issues は、本文に「機能：」が無い Issue を人が結び付けたもの（2026-11-27 時点で開いていたもの）。words は題の言葉からの割り振り。
+// 新しい機能を作ったら、ここに足す PR を出す（マージは人）。
 import type { Catalog } from './workmap.ts';
 
 export const CATALOGS: Record<string, Catalog> = {
@@ -700,5 +701,159 @@ export const CATALOGS: Record<string, Catalog> = {
    ]
   ]
  ]
+},
+  'Watanabe-Masao/idea-flow': {
+ "features": [
+  {
+   "id": "map-ui",
+   "group": "画面",
+   "name": "地図の画面",
+   "desc": "機能ごとの稼働・Issue の経過・つながり・データの流れ（public/map.js）",
+   "files": [
+    "^public/map\\.js"
+   ],
+   "data": [
+    "d1"
+   ],
+   "aliases": [
+    "地図の画面",
+    "地図"
+   ]
+  },
+  {
+   "id": "docs-ui",
+   "group": "画面",
+   "name": "文書の画面",
+   "desc": "決まりの文書の一覧と気になる所・画面の土台（public/index.html）",
+   "files": [
+    "^public/index\\.html"
+   ],
+   "data": [
+    "d1"
+   ],
+   "aliases": [
+    "文書の画面",
+    "文書",
+    "画面"
+   ]
+  },
+  {
+   "id": "map-core",
+   "group": "しくみ",
+   "name": "地図の計算と取り込み",
+   "desc": "PR・Issue の取り込み、機能への割り振り、状態、つながりと根拠、機能の一覧（カタログ）",
+   "files": [
+    "(^src/workmap\\.ts|^src/catalogs\\.ts)"
+   ],
+   "data": [
+    "gh",
+    "d1"
+   ],
+   "aliases": [
+    "地図の計算",
+    "カタログ",
+    "取り込み"
+   ]
+  },
+  {
+   "id": "rules",
+   "group": "しくみ",
+   "name": "文書の取り込みと診断",
+   "desc": "決まりの文書を条項に分け、重複・食い違い・古い決まり・読まれない文書を見つける",
+   "files": [
+    "(^src/rules|^src/audit\\.ts|^src/diagnosis\\.ts|^src/embed\\.ts|^src/vec\\.ts)"
+   ],
+   "data": [
+    "gh",
+    "ai",
+    "d1"
+   ],
+   "aliases": [
+    "診断",
+    "決まりの見える化"
+   ]
+  },
+  {
+   "id": "mcp",
+   "group": "しくみ",
+   "name": "コネクタ（MCP）",
+   "desc": "Claude が地図と文書を読む入口（idea_flow の action）",
+   "files": [
+    "^src/mcp"
+   ],
+   "data": [
+    "d1"
+   ],
+   "aliases": [
+    "コネクタ",
+    "MCP"
+   ]
+  },
+  {
+   "id": "base",
+   "group": "裏方",
+   "name": "土台（API・GitHub・設定）",
+   "desc": "API の入口・GitHub とのやり取り・Worker の設定・表（マイグレーション）",
+   "files": [
+    "(^src/api\\.ts|^src/gh\\.ts|^src/index\\.ts|^src/util\\.ts|^src/types\\.ts|^wrangler\\.jsonc|^migrations/)"
+   ],
+   "data": [
+    "gh",
+    "d1"
+   ],
+   "aliases": [
+    "土台",
+    "削ぎ落とし"
+   ]
+  },
+  {
+   "id": "rules-doc",
+   "group": "裏方",
+   "name": "決まりと文書",
+   "desc": "README・CLAUDE.md・Issue のひな形（ほかの機能に当たらない作業だけを数える）",
+   "files": [
+    "(^README\\.md|^CLAUDE\\.md|^\\.github/|^docs/)"
+   ],
+   "data": [],
+   "aliases": [
+    "決まり",
+    "書き方"
+   ],
+   "fallback": true
+  },
+  {
+   "id": "ci",
+   "group": "裏方",
+   "name": "テスト",
+   "desc": "テストと package.json（ほかの機能に当たらない作業だけを数える）",
+   "files": [
+    "(^test/|package(-lock)?\\.json|tsconfig\\.json)"
+   ],
+   "data": [],
+   "aliases": [
+    "テスト"
+   ],
+   "fallback": true
+  }
+ ],
+ "nodes": {
+  "gh": {
+   "col": 0,
+   "name": "GitHub の PR・Issue・ファイル",
+   "note": "開いたときに取る"
+  },
+  "ai": {
+   "col": 0,
+   "name": "Workers AI（埋め込み）",
+   "note": "取り込みのとき"
+  },
+  "d1": {
+   "col": 1,
+   "name": "D1（写し・診断・取り込みの位置）",
+   "note": "画面で使う"
+  }
+ },
+ "issues": {},
+ "words": []
 },
 };
