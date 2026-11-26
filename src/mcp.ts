@@ -10,7 +10,8 @@ import { safeEqual } from './util.ts';
 
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
-const INSTRUCTIONS = `idea-flow は、リポジトリの CLAUDE.md・ROLE.md・SKILL.md・決まりの文書を「決まりの単位（条項）」に分け、どこに効いているか、どんな問題があるかを見える化する道具です。
+const INSTRUCTIONS = `（道具は idea_flow ひとつを使う。action="help" でできることを確かめる。ほかの道具は古い会話のために残しているもの）
+idea-flow は、リポジトリの CLAUDE.md・ROLE.md・SKILL.md・決まりの文書を「決まりの単位（条項）」に分け、どこに効いているか、どんな問題があるかを見える化する道具です。
 - これは人と Claude が相談するための道具です。決めるのは人です。見つかった問題は、事実（どの文書の何行目か、どう読まれるか）と、あなたの見立て（なぜ問題か、直し方の案、直したときの副作用）を分けて伝えてください。
 - あなたが変えられるのは「提案」だけです（propose_scope_change で変更リクエストを出す）。反映するかは人がアプリで承認して決めます。リポジトリの中身は変えられません。直し方の案は、人が確かめられるように具体的に書いてください。
 - 範囲の木：決まりの文書を範囲（例：画面、満月の物語）に付けると、その範囲と下の範囲に効きます。横の範囲には効きません。例外で、ある文書のある見出しの決まりを、その範囲（と下）だけ外せます。
@@ -86,6 +87,31 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
 ];
+
+/**
+ * ひとつの入口。会話は始めた時点の道具の一覧を使い続けるので、機能を足しても一覧が変わらないように、
+ * 「何をするか（action）」と「中身（args）」を渡す形にする。新しい機能は action を足すだけ。
+ */
+const ACTIONS: Record<string, { tool: string; summary: string }> = {
+  help: { tool: '', summary: 'できること（action）の一覧と、それぞれの args' },
+  overview: { tool: 'rules_overview', summary: '診断書（結論・なぜ困るか・次の一手）。args: repo?, docs?' },
+  findings: { tool: 'list_rule_findings', summary: '問題の一覧。args: repo?, kind?, limit?, offset?' },
+  read_doc: { tool: 'read_rule_doc', summary: '文書を見出しごとに行番号つきで。args: repo, path, heading?, offset?, limit?' },
+  xray: { tool: 'xray_scene', summary: '場面のレントゲン。args: repo, scene, scope?' },
+  scopes: { tool: 'read_scopes', summary: '範囲の木と変更リクエスト。args: repo' },
+  contract: { tool: 'read_scope_contract', summary: 'その範囲で Claude に渡す内容。args: repo, scope' },
+  propose: { tool: 'propose_scope_change', summary: '範囲の木の変更リクエストを出す（反映は人の承認）。args: repo, title, reason, ops' },
+  search: { tool: 'search_rules', summary: '意味の近い決まりを探す。args: query, repo?, limit?' },
+};
+const ENTRY = {
+  name: 'idea_flow',
+  description: 'idea-flow のひとつの入口。action と args を渡す。まず action="help" で、いまできること（機能が増えても、この道具のまま使える）を確かめる。主な action：overview（診断書）・xray（場面のレントゲン）・scopes（範囲の木）・contract（範囲の契約）・propose（変更リクエストを出す。反映は人の承認）・findings・read_doc・search。',
+  inputSchema: {
+    type: 'object',
+    properties: { action: { type: 'string', description: 'help / overview / findings / read_doc / xray / scopes / contract / propose / search（ほかにも増える。help で確かめる）' }, args: { type: 'object', description: 'action ごとの中身（help で確かめる）' } },
+    required: ['action'], additionalProperties: false,
+  },
+};
 
 type Rpc = { jsonrpc: '2.0'; id?: string | number | null; method: string; params?: Record<string, unknown> };
 const ok = (id: Rpc['id'], result: unknown) => ({ jsonrpc: '2.0', id, result });
@@ -216,19 +242,32 @@ async function callTool(env: Env, name: string, a: Record<string, unknown>) {
   }
 }
 
+async function callEntry(env: Env, action: string, args: Record<string, unknown>) {
+  if (action === 'help' || !ACTIONS[action]) {
+    const head = action === 'help' ? '' : `「${action}」という action はありません。\n\n`;
+    return text(head + 'idea_flow の action（args は JSON のオブジェクトで渡す）\n' + Object.entries(ACTIONS).filter(([k]) => k !== 'help').map(([k, v]) => `- ${k}：${v.summary}`).join('\n')
+      + '\n\npropose の ops の例：{"op":"add_scope","key":"screen","name":"画面","parent":"root"}／{"op":"attach","scope":"screen","path":"docs/design-system.md"}／{"op":"add_exception","scope":"moon","path":"docs/design-system.md","heading":"2. 色","why":"…"}（ほかに rename_scope・move_scope・remove_scope・detach・remove_exception）', action !== 'help');
+  }
+  return callTool(env, ACTIONS[action].tool, args);
+}
+
 async function handle(env: Env, m: Rpc) {
   const id = m.id;
   switch (m.method) {
     case 'initialize': {
       const want = String(m.params?.protocolVersion ?? '');
-      return ok(id, { protocolVersion: VERSIONS.includes(want) ? want : VERSIONS[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'idea-flow', version: '0.2.0' }, instructions: INSTRUCTIONS });
+      return ok(id, { protocolVersion: VERSIONS.includes(want) ? want : VERSIONS[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'idea-flow', version: '0.3.0' }, instructions: INSTRUCTIONS });
     }
     case 'ping': return ok(id, {});
-    case 'tools/list': return ok(id, { tools: TOOLS });
+    case 'tools/list': return ok(id, { tools: [ENTRY, ...TOOLS] });
     case 'tools/call': {
       const name = String(m.params?.name ?? '');
-      if (!TOOLS.some(t => t.name === name)) return err(id, -32602, `知らない道具です：${name}`);
-      try { return ok(id, await callTool(env, name, (m.params?.arguments ?? {}) as Record<string, unknown>)); }
+      if (name !== ENTRY.name && !TOOLS.some(t => t.name === name)) return err(id, -32602, `知らない道具です：${name}`);
+      try {
+        const args = (m.params?.arguments ?? {}) as Record<string, unknown>;
+        if (name === ENTRY.name) return ok(id, await callEntry(env, String(args.action ?? 'help'), (args.args ?? {}) as Record<string, unknown>));
+        return ok(id, await callTool(env, name, args));
+      }
       catch (e) { return ok(id, text(e instanceof Error ? e.message : String(e), true)); }
     }
     case 'resources/list': return ok(id, { resources: [] });

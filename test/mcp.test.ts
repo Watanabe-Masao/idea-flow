@@ -38,8 +38,11 @@ test('MCP：合言葉・初期化・道具・読むだけの道具で見える�
     assert.match(init.json.result.instructions, /決めるのは人/);
     assert.equal((await rpc(env, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
     const tools = (await rpc(env, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json.result.tools;
-    assert.deepEqual(tools.map((t: any) => t.name), ['rules_overview', 'list_rule_findings', 'read_rule_doc', 'xray_scene', 'read_scopes', 'read_scope_contract', 'propose_scope_change', 'search_rules']);
-    assert.ok(tools.filter((t: any) => t.name !== 'propose_scope_change').every((t: any) => t.annotations.readOnlyHint));
+    assert.equal(tools[0].name, 'idea_flow');
+    assert.deepEqual(tools.slice(1).map((t: any) => t.name), ['rules_overview', 'list_rule_findings', 'read_rule_doc', 'xray_scene', 'read_scopes', 'read_scope_contract', 'propose_scope_change', 'search_rules']);
+    assert.ok(tools.filter((t: any) => !['propose_scope_change', 'idea_flow'].includes(t.name)).every((t: any) => t.annotations.readOnlyHint));
+    assert.match((await call(env, 'idea_flow', { action: 'help' })).content[0].text, /- xray：場面のレントゲン/);
+    assert.equal((await call(env, 'idea_flow', { action: 'nope' })).isError, true);
     assert.match((await call(env, 'rules_overview')).content[0].text, /まだ何も取り込まれていません/);
     await saveSource(env, 'o/r', Object.keys(files));
     await syncRules(env, 'o/r');
@@ -56,5 +59,6 @@ test('MCP：合言葉・初期化・道具・読むだけの道具で見える�
     assert.match(rd, /## 文字\n3: 文字は Noto Sans JP/);
     assert.equal((await call(env, 'read_rule_doc', { repo: 'o/r', path: 'x.md' })).isError, true);
     assert.match((await call(env, 'search_rules', { query: '文字は Noto Sans JP' })).content[0].text, /近さ/);
+    assert.match((await call(env, 'idea_flow', { action: 'read_doc', args: { repo: 'o/r', path: 'docs/design.md' } })).content[0].text, /## 文字/);
   } finally { globalThis.fetch = real; }
 });
