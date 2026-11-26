@@ -154,3 +154,10 @@ test('書き方の守り具合：題の頭・Issue の番号・申告、Issue �
   assert.deepEqual([w.prs, w.prTitle, w.prLinked, w.prReport, w.issues, w.issueFeature, w.issueClose], [2, 1, 1, 1, 2, 1, 1]);
   assert.deepEqual(w.misses.map(m => [m.n, m.miss.length]), [[6, 3], [4, 2]]);
 });
+
+test('申告は区切り線（---）で終わる・「関連：なし」は守れていると数える', async () => {
+  const { parseReport, writingCheck } = await import('../src/workmap.ts');
+  assert.deepEqual(parseReport('## 足りなかった決まり\n- なし\n\n---\n\n🤖 Generated')!.lack, []);
+  const w = writingCheck(CAT, [{ number: 1, title: '満月の物語：x', url: 'u', merged_at: '2026-11-20T00:00:00Z', files: [], closes: [], body: '関連：なし' }], [], new Map());
+  assert.equal(w.prLinked, 1);
+});
