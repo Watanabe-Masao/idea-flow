@@ -5,6 +5,7 @@ import { syncGithub } from './github.ts';
 import { refreshEmbeddings, embedMany, MODEL } from './embed.ts';
 import { errorJson, json, jstDay, newId, nowIso, safeEqual } from './util.ts';
 import { analyze, dismiss, listFiles, rulesView, saveSource, setExternal, syncRules, xray } from './rules.ts';
+import { contractText, decide as decideChange, preview as previewChange, propose, requests as changeRequests, scopeTree } from './scopes.ts';
 
 const isAdmin = (req: Request, env: Env) => {
   const h = req.headers.get('authorization') ?? '';
@@ -111,7 +112,9 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
     }
     if (req.method === 'GET' && p === '/api/eval') return json(await evaluate(env));
     if (req.method === 'GET' && p === '/api/rules') return json(await rulesView(env));
-    if (req.method === 'GET' && p === '/api/rules/xray') return json(await xray(env, url.searchParams.get('repo') ?? '', url.searchParams.get('scene') ?? ''));
+    if (req.method === 'GET' && p === '/api/rules/xray') return json(await xray(env, url.searchParams.get('repo') ?? '', url.searchParams.get('scene') ?? '', url.searchParams.get('scope') ?? ''));
+    if (req.method === 'GET' && p === '/api/scopes') { const r = url.searchParams.get('repo') ?? ''; return json({ tree: await scopeTree(env, r), requests: await changeRequests(env, r) }); }
+    if (req.method === 'GET' && p === '/api/scopes/contract') { const r = url.searchParams.get('repo') ?? '', t = await scopeTree(env, r), sc = t.find(x => x.key === url.searchParams.get('scope')); if (!sc) return errorJson('範囲が見つかりません', 404); return json({ text: contractText(r, t, sc.id) }); }
     if (req.method === 'GET' && p === '/api/rules/files') return json(await listFiles(env, url.searchParams.get('repo') ?? ''));
     if (req.method === 'GET' && p === '/api/selftest') {
       const v = await embedMany(env, ['満月の物語：ページ送り', '予報の履歴の取り込み']);
@@ -127,6 +130,9 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       if (p === '/api/rules/source') return json(await saveSource(env, String(body.repo ?? ''), Array.isArray(body.files) ? body.files as string[] : []));
       if (p === '/api/rules/sync') return json(await syncRules(env, String(body.repo ?? '')));
       if (p === '/api/rules/analyze') return json(await analyze(env));
+      if (p === '/api/scopes/propose') return json(await propose(env, String(body.repo ?? ''), 'human', String(body.title ?? ''), String(body.reason ?? ''), body.ops as never));
+      if (p === '/api/scopes/preview') return json(await previewChange(env, String(body.repo ?? ''), body.ops as never));
+      if (p === '/api/scopes/decide') return json(await decideChange(env, String(body.id ?? ''), body.decision === 'accept' ? 'accept' : 'reject', body.note ? String(body.note).slice(0, 500) : null));
       if (p === '/api/rules/external') return json(await setExternal(env, String(body.repo ?? ''), String(body.path ?? ''), !!body.external));
       if (p === '/api/rules/dismiss') return json(await dismiss(env, String(body.key ?? ''), body.why ? String(body.why).slice(0, 200) : null));
     }
