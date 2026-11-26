@@ -4,6 +4,7 @@ import { syncLinear, attachCommit } from './linear.ts';
 import { syncGithub } from './github.ts';
 import { refreshEmbeddings, embedMany, MODEL } from './embed.ts';
 import { errorJson, json, jstDay, newId, nowIso, safeEqual } from './util.ts';
+import { analyze, dismiss, listFiles, rulesView, saveSource, syncRules } from './rules.ts';
 
 const isAdmin = (req: Request, env: Env) => {
   const h = req.headers.get('authorization') ?? '';
@@ -82,7 +83,7 @@ async function assign(env: Env, body: { sha?: string; issue?: string | null; the
 }
 
 async function saveSettings(env: Env, body: Record<string, unknown>) {
-  const allowed = ['issue_auto', 'issue_ask', 'theme_auto', 'theme_ask', 'cluster_link', 'cluster_min', 'premise_min', 'min_sim'];
+  const allowed = ['issue_auto', 'issue_ask', 'theme_auto', 'theme_ask', 'cluster_link', 'cluster_min', 'premise_min', 'min_sim', 'rule_dup', 'rule_conflict', 'rule_skill'];
   const now = nowIso();
   const stmts: D1PreparedStatement[] = [];
   for (const [k, v] of Object.entries(body)) {
@@ -109,6 +110,8 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       return json((await env.DB.prepare('SELECT * FROM events ORDER BY at DESC LIMIT 100').all()).results);
     }
     if (req.method === 'GET' && p === '/api/eval') return json(await evaluate(env));
+    if (req.method === 'GET' && p === '/api/rules') return json(await rulesView(env));
+    if (req.method === 'GET' && p === '/api/rules/files') return json(await listFiles(env, url.searchParams.get('repo') ?? ''));
     if (req.method === 'GET' && p === '/api/selftest') {
       const v = await embedMany(env, ['満月の物語：ページ送り', '予報の履歴の取り込み']);
       return json({ model: MODEL, dims: v[0].length, similarity: v[0].reduce((s, x, i) => s + x * v[1][i], 0) });
@@ -120,6 +123,10 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       if (p === '/api/decide') return decide(env, body as never);
       if (p === '/api/assign') return assign(env, body as never);
       if (p === '/api/settings') return saveSettings(env, body);
+      if (p === '/api/rules/source') return json(await saveSource(env, String(body.repo ?? ''), Array.isArray(body.files) ? body.files as string[] : []));
+      if (p === '/api/rules/sync') return json(await syncRules(env, String(body.repo ?? '')));
+      if (p === '/api/rules/analyze') return json(await analyze(env));
+      if (p === '/api/rules/dismiss') return json(await dismiss(env, String(body.key ?? ''), body.why ? String(body.why).slice(0, 200) : null));
     }
     return errorJson('見つかりません', 404);
   } catch (e) {
