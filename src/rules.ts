@@ -82,6 +82,9 @@ const ruleText = (i: { heading: string; text: string }) => (i.heading ? i.headin
 type Item = { id: string; doc: string; heading: string; text: string; kind: string };
 type Doc = { id: string; repo: string; path: string; kind: string; applies: string; scope: string; title: string | null; description: string | null; refs: string; external: number; external_by: string | null };
 
+/** 問題の探し方の版。探し方を変えたら上げる（古い結果のままなら、画面で取り込み直しを促す） */
+export const ANALYZE_VERSION = '3';
+
 /** 問題を探し直す（全部のリポジトリをまとめて。別のリポジトリどうしの重複も見える） */
 export async function analyze(env: Env) {
   const st = Object.fromEntries((await env.DB.prepare("SELECT key, value FROM settings WHERE key LIKE 'rule_%'").all<{ key: string; value: string }>()).results.map(r => [r.key, Number(r.value)]));
@@ -146,6 +149,7 @@ export async function analyze(env: Env) {
   }
 
   await env.DB.batch([
+    env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('rule_analyze_v', ?)").bind(ANALYZE_VERSION),
     env.DB.prepare('DELETE FROM rule_findings'),
     ...bulkInsert(env.DB, 'INSERT OR IGNORE INTO rule_findings (key, kind, a, b, score, detail) VALUES', 6, rows),
   ]);
@@ -193,7 +197,8 @@ export async function rulesView(env: Env) {
   const srcs = await sources(env);
   const repos = [...new Set([...srcs.map(x => x.repo), ...ds.map(d => d.repo)])];
   const diagnosis = Object.fromEntries(repos.map(r => [r, diagnose(r, findings, ds, items as { id: string; doc: string }[])]));
-  return { sources: srcs, docs: ds, items, findings, dismissed: dismissed.size, diagnosis };
+  const av = await env.DB.prepare("SELECT value FROM settings WHERE key = 'rule_analyze_v'").first<{ value: string }>();
+  return { sources: srcs, docs: ds, items, findings, dismissed: dismissed.size, diagnosis, stale: ds.length > 0 && av?.value !== ANALYZE_VERSION };
 }
 
 export async function dismiss(env: Env, key: string, why: string | null) {
