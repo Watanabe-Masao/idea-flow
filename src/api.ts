@@ -4,6 +4,7 @@ import { syncLinear, attachCommit } from './linear.ts';
 import { syncGithub } from './github.ts';
 import { refreshEmbeddings, embedMany, MODEL } from './embed.ts';
 import { errorJson, json, jstDay, newId, nowIso, safeEqual } from './util.ts';
+import { approveAiMemos, assignMemo, computeMemoSuggestions, memoMap, projectFlow, saveMemo, searchMemos, upsertProject } from './memo.ts';
 
 const isAdmin = (req: Request, env: Env) => {
   const h = req.headers.get('authorization') ?? '';
@@ -16,7 +17,8 @@ export async function pipeline(env: Env) {
   const github = await syncGithub(env);
   const embeddings = await refreshEmbeddings(env);
   const suggestions = await computeSuggestions(env);
-  return { at: nowIso(), linear, github, embeddings, suggestions };
+  const memos = await computeMemoSuggestions(env);
+  return { at: nowIso(), linear, github, embeddings, suggestions, memos };
 }
 
 async function mapData(env: Env) {
@@ -41,10 +43,12 @@ async function pending(env: Env) {
   // 近さの高い順。コミットの振り分けを先に、新しい塊・前提はあとに
   const [rows, total] = await Promise.all([
     env.DB.prepare(
-      `SELECT s.id, s.kind, s.subject, s.target, s.score, s.detail, s.created_at, c.message, c.committed_at, c.url
-         FROM suggestions s LEFT JOIN commits c ON c.sha = s.subject
+      `SELECT s.id, s.kind, s.subject, s.target, s.score, s.detail, s.created_at,
+              COALESCE(c.message, CASE WHEN m.heading IS NOT NULL THEN m.heading || '：' || m.body ELSE m.body END) AS message,
+              COALESCE(c.committed_at, m.at) AS committed_at, COALESCE(c.url, m.ref) AS url
+         FROM suggestions s LEFT JOIN commits c ON c.sha = s.subject LEFT JOIN memos m ON m.id = s.subject
         WHERE s.status = 'pending'
-        ORDER BY CASE WHEN s.kind IN ('commit_issue','commit_theme') THEN 0 ELSE 1 END, s.score DESC LIMIT 500`,
+        ORDER BY CASE WHEN s.kind IN ('commit_issue','commit_theme','memo_project') THEN 0 ELSE 1 END, s.score DESC LIMIT 500`,
     ).all(),
     env.DB.prepare("SELECT COUNT(*) AS n FROM suggestions WHERE status = 'pending'").first<{ n: number }>(),
   ]);
@@ -82,7 +86,7 @@ async function assign(env: Env, body: { sha?: string; issue?: string | null; the
 }
 
 async function saveSettings(env: Env, body: Record<string, unknown>) {
-  const allowed = ['issue_auto', 'issue_ask', 'theme_auto', 'theme_ask', 'cluster_link', 'cluster_min', 'premise_min', 'min_sim'];
+  const allowed = ['issue_auto', 'issue_ask', 'theme_auto', 'theme_ask', 'cluster_link', 'cluster_min', 'premise_min', 'min_sim', 'memo_auto', 'memo_ask'];
   const now = nowIso();
   const stmts: D1PreparedStatement[] = [];
   for (const [k, v] of Object.entries(body)) {
@@ -109,6 +113,9 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       return json((await env.DB.prepare('SELECT * FROM events ORDER BY at DESC LIMIT 100').all()).results);
     }
     if (req.method === 'GET' && p === '/api/eval') return json(await evaluate(env));
+    if (req.method === 'GET' && p === '/api/memos') return json(await memoMap(env));
+    if (req.method === 'GET' && p.startsWith('/api/projects/')) return json(await projectFlow(env, decodeURIComponent(p.slice(14))));
+    if (req.method === 'GET' && p === '/api/search') return json(await searchMemos(env, url.searchParams.get('q') ?? ''));
     if (req.method === 'GET' && p === '/api/selftest') {
       const v = await embedMany(env, ['満月の物語：ページ送り', '予報の履歴の取り込み']);
       return json({ model: MODEL, dims: v[0].length, similarity: v[0].reduce((s, x, i) => s + x * v[1][i], 0) });
@@ -120,6 +127,10 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       if (p === '/api/decide') return decide(env, body as never);
       if (p === '/api/assign') return assign(env, body as never);
       if (p === '/api/settings') return saveSettings(env, body);
+      if (p === '/api/memos') return json(await saveMemo(env, body, 'human'));
+      if (p === '/api/projects') return json(await upsertProject(env, body, 'human'));
+      if (p === '/api/memo-assign') { await assignMemo(env, String(body.memo ?? ''), body.project ? String(body.project) : null); return json({ ok: true }); }
+      if (p === '/api/memo-approve-ai') return json({ approved: await approveAiMemos(env, String(body.project ?? '')) });
     }
     return errorJson('見つかりません', 404);
   } catch (e) {

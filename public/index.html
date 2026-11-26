@@ -34,12 +34,13 @@ table{border-collapse:collapse;font-size:13px;width:100%}td,th{padding:4px 6px;b
 <h1>idea-flow</h1>
 <p class="sub">行はLinearのテーマと課題、点はGitHubのコミット。番号で確定したものは黒、手本との多数決（bge‑m3）で自動で決めたものは灰。赤い小さな印は確認待ちを含む点。</p>
 <div class="card" id="gate" hidden><label for="tok" class="sub">合言葉（ADMIN_TOKEN）</label><div class="row"><input id="tok" type="password" autocomplete="current-password" style="flex:1"><button class="btn p" id="saveTok">使う</button></div></div>
-<div class="tabs" role="tablist"><button class="tab" data-v="map" role="tab">流れ</button><button class="tab" data-v="pending" role="tab">確認待ち <b id="pc"></b></button><button class="tab" data-v="eval" role="tab">答え合わせ</button><button class="btn" id="sync" style="margin-left:auto">取り込み直す</button></div>
+<div class="tabs" role="tablist"><button class="tab" data-v="map" role="tab">流れ</button><button class="tab" data-v="pending" role="tab">確認待ち <b id="pc"></b></button><button class="tab" data-v="proj" role="tab">企画</button><button class="tab" data-v="eval" role="tab">答え合わせ</button><button class="btn" id="sync" style="margin-left:auto">取り込み直す</button></div>
 <div id="msg" aria-live="polite"></div>
 <section id="v-map"><div class="card"><div class="row" style="margin:0 0 6px"><button class="btn" id="openAll">すべて開く</button><button class="btn" id="closeAll">すべて閉じる</button><span class="seg" role="group" aria-label="期間"><button data-per="14">2週</button><button data-per="35">5週</button><button data-per="91">3か月</button></span></div><div class="fig" id="fig"></div>
 <div class="legend"><span>● 確定・承認済み</span><span style="color:var(--mute)">● 自動（近さ）</span><span>○ 確認待ちだけ</span><span><span style="color:var(--red)">•</span> 確認待ちを含む</span><span>点の数字＝コミット数</span><span>右端：▶進行中 ○未着手 ✓完了 ×中止 ＝重複</span></div></div>
 <div class="card" id="detail"><p class="sub">行をタップすると課題とつながり、点をタップするとコミットが出ます。</p></div></section>
 <section id="v-pending" hidden><div class="card" id="plist"></div></section>
+<section id="v-proj" hidden><div class="card" id="projs"></div></section>
 <section id="v-eval" hidden><div class="card" id="sets"></div><div class="card" id="elist"><p class="sub">番号で確定しているコミットを正解として、手本のコミットとの多数決でどこまで当てられるかを測ります。</p><div class="row"><button class="btn p" id="runEval">答え合わせをする</button></div></div></section>
 </div>
 <script>
@@ -115,7 +116,7 @@ function pop(k,lo,hi,cx,cy){closePop();const cs=M.commits.filter(c=>c.d>=lo&&c.d
  el.innerHTML=`<div class="row" style="justify-content:space-between;margin:0"><b>${d}（${cs.length}件）</b><button class="btn" data-close="1" aria-label="閉じる" style="min-height:36px">×</button></div><ul>${cs.map(cLi).join('')}</ul>`;
  fig.appendChild(el);const W=fig.clientWidth,w=el.offsetWidth;el.style.left=Math.max(8,Math.min(W-w-8,cx-w/2))+'px';el.style.top=(cy+16+el.offsetHeight>fig.clientHeight&&cy-16-el.offsetHeight>0?cy-16-el.offsetHeight:cy+16)+'px'}
 function closePop(){const p=$('#pop');if(p)p.remove()}
-const KIND={commit_issue:'このコミットはどの課題？',commit_theme:'このコミットはどのテーマ？',new_cluster:'新しいテーマの候補',theme_premise:'テーマの前提'};
+const KIND={memo_project:'このメモはどの企画？',memo_cluster:'新しい企画の候補',commit_issue:'このコミットはどの課題？',commit_theme:'このコミットはどのテーマ？',new_cluster:'新しいテーマの候補',theme_premise:'テーマの前提'};
 let PTOTAL=0,PDONE=0;const PSKIP=new Set();
 function themeLabel(k){return k+' '+(TH[k]||'')}
 function issueLabel(id){return IS[id]?id+' '+IS[id].t.replace(/^#\d+\s*/,''):id}
@@ -132,12 +133,43 @@ function plist(){const el=$('#plist');$('#pc').textContent=PTOTAL||'';
   <p class="to">→ <b>${esc(lbl(p.target))}</b> に入れますか？<small>確からしさ ${(+p.score).toFixed(2)}${p.detail.heading?'・見出し「'+esc(p.detail.heading)+'」':''}</small></p>${ask('はい','いいえ')}
   ${alts.length?`<h3>ほかの候補</h3><div class="alts">${alts.map(a=>`<button class="btn" data-dec="accept" data-id="${esc(p.id)}" data-target="${esc(a.id)}">${esc(lbl(a.id))}<small>確からしさ ${(+a.score).toFixed(2)}</small></button>`).join('')}</div>`:''}
   <h3>テーマを選んで入れる</h3><select data-assign="${esc(p.subject)}" data-id="${esc(p.id)}"><option value="">選ぶ…</option>${Object.keys(TH).map(k=>`<option value="${esc(k)}">${esc(themeLabel(k))}</option>`).join('')}</select>`}
+ else if(p.kind==='memo_project'){const alts=(p.detail.top||[]).filter(a=>a.id!==p.target).slice(0,2);
+  body=`<p class="q">${esc(p.message)}</p><small>${esc(String(p.committed_at||'').slice(0,10))}</small>
+  <p class="to">→ <b>${esc(PN(p.target))}</b> に入れますか？<small>確からしさ ${(+p.score).toFixed(2)}</small></p>${ask('はい','いいえ')}
+  ${alts.length?`<h3>ほかの候補</h3><div class="alts">${alts.map(a=>`<button class="btn" data-dec="accept" data-id="${esc(p.id)}" data-target="${esc(a.id)}">${esc(PN(a.id))}<small>確からしさ ${(+a.score).toFixed(2)}</small></button>`).join('')}</div>`:''}
+  <h3>企画を選んで入れる</h3><select data-massign="${esc(p.subject)}" data-id="${esc(p.id)}"><option value="">選ぶ…</option>${MM.projects.filter(x=>x.status!=='中止').map(x=>`<option value="${esc(x.key)}">${esc(x.key+' '+x.name)}</option>`).join('')}</select>`}
+ else if(p.kind==='memo_cluster'){const ms=(p.detail.members||[]).map(id=>MM.memos.find(m=>m.id===id)).filter(Boolean);
+  body=`<p class="q">どの企画にも入らないメモが ${ms.length}件まとまっています</p><ul class="items">${ms.slice(0,6).map(m=>`<li>${m.hd?'<b>'+esc(m.hd)+'</b>：':''}${esc(m.b)}<small>${m.d}</small></li>`).join('')}</ul>
+  <p class="to">新しい企画にしますか？</p><input id="mcname" placeholder="企画の名前" style="width:100%"><div class="row"><button class="btn p big" data-mcmake="${esc(p.id)}">企画にする</button><button class="btn big" data-dec="reject" data-id="${esc(p.id)}">いいえ</button></div>`}
  else if(p.kind==='new_cluster'){const ms=(p.detail.members||[]).map(sha=>M.commits.find(c=>sha.startsWith(c.sha))).filter(Boolean);
   body=`<p class="q">「${esc(p.detail.label)}」など ${(p.detail.members||[]).length}件のまとまり</p><ul class="items">${ms.slice(0,5).map(c=>`<li>${esc(c.m)}<small>${c.d}</small></li>`).join('')}</ul>
   <p class="to">新しいテーマにしますか？<small>いちばん近い既存テーマ：${esc(p.detail.nearestTheme?themeLabel(p.detail.nearestTheme.id)+'（'+(+p.detail.nearestTheme.score).toFixed(2)+'）':'なし')}。承認したら Linear にテーマのラベルを作ってください。</small></p>${ask('はい','いいえ')}`}
  else if(p.kind==='theme_premise')body=`<p class="q">${esc(themeLabel(p.subject))} の前提は ${esc(themeLabel(p.target))}？</p><small>近さ ${(+p.score).toFixed(2)}・先に生まれたテーマ</small>${ask('はい','いいえ')}`;
  el.innerHTML=head+body+later}
-let reloadT=0;function reloadSoon(){clearTimeout(reloadT);reloadT=setTimeout(async()=>{try{M=await api('/api/map');index();if(VIEW==='map'){draw();detail()}}catch(e){}},1500)}
+let reloadT=0;function reloadSoon(){clearTimeout(reloadT);reloadT=setTimeout(async()=>{try{M=await api('/api/map');index();await loadMemos();if(VIEW==='map'){draw();detail()}if(VIEW==='proj')projView()}catch(e){}},1500)}
+// ── 企画とメモ ──
+let MM={projects:[],memos:[]},PSEL=null;
+const PN=k=>{const p=MM.projects.find(x=>x.key===k);return p?p.key+' '+p.name:k};
+const MHOW={human:'自分',accepted:'承認済み',ai:'AI・未承認',auto:'自動',pending:'確認待ち',none:'企画なし'};
+const STATES=['候補','進行中','判断待ち','保留','完了','中止'],MK=['決定','案','保留','疑問','メモ'];
+async function loadMemos(){try{MM=await api('/api/memos')}catch(e){MM={projects:[],memos:[]}}}
+function strip(key){const days=35,today=Date.parse(new Date(Date.now()+9*36e5).toISOString().slice(0,10)),W=300,H=18,cnt={};
+ MM.memos.filter(m=>m.p===key).forEach(m=>{const i=Math.round((Date.parse(m.d)-today)/864e5)+days-1;if(i>=0)cnt[i]=(cnt[i]||0)+1});
+ return`<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" aria-hidden="true"><line x1="0" y1="9" x2="${W}" y2="9" stroke="var(--line)"/>${Object.entries(cnt).map(([i,n])=>`<circle cx="${4+i/(days-1)*(W-8)}" cy="9" r="${Math.min(7,2.5+n)}" fill="var(--ink)"/>`).join('')}</svg>`}
+function mLi(m){const ed=m.h==='ai'||m.h==='none'||m.h==='pending'||m.h==='auto';return`<li><span class="badge${m.k==='保留'||m.k==='疑問'?' r':''}">${esc(m.k)}</span> ${m.hd?'<b>'+esc(m.hd)+'</b>：':''}${esc(m.b)}<small>${m.d}・${m.src==='ai'?'AIが記録':'自分で記録'}・${MHOW[m.h]}${m.p&&m.h!=='human'&&m.h!=='accepted'?'（'+esc(PN(m.p))+'）':''}${m.ref?` ・ <a href="${esc(m.ref)}" target="_blank" rel="noopener">会話</a>`:''}</small>${ed?`<select data-massign="${esc(m.id)}" style="margin-top:6px"><option value="">企画を選んで決める…</option>${MM.projects.filter(p=>p.status!=='中止').map(p=>`<option value="${esc(p.key)}">${esc(p.key+' '+p.name)}</option>`).join('')}<option value="-">どこにも入れない</option></select>`:''}</li>`}
+function projView(){const el=$('#projs');if(PSEL){const p=MM.projects.find(x=>x.key===PSEL);if(!p){PSEL=null;return projView()}
+  const ms=MM.memos.filter(m=>m.p===p.key).reverse(),ai=ms.filter(m=>m.h==='ai').length,parent=p.parent?MM.projects.find(x=>x.key===p.parent):null;
+  el.innerHTML=`<div class="row" style="margin:0"><button class="btn" data-pback="1">← 一覧</button></div><h2 style="margin-top:10px">${esc(p.key)} ${esc(p.name)}</h2>
+  <p class="sub">${esc(p.note||'説明なし')}</p><p class="sub">${p.state}・最後に動いたのは${p.quietDays}日前${parent?'・前提 '+esc(parent.key+' '+parent.name):''}${p.children.length?'・枝分かれ '+p.children.map(esc).join('、'):''}</p>
+  <div class="row"><select data-pstatus="${esc(p.key)}" style="width:auto">${STATES.map(s=>`<option${s===p.status?' selected':''}>${s}</option>`).join('')}</select>${ai?`<button class="btn p" data-approveai="${esc(p.key)}">AIのメモ ${ai}件をまとめて承認</button>`:''}</div>
+  <h3>メモを書く</h3><div class="row"><select id="nk" style="width:auto">${MK.map(k=>`<option>${k}</option>`).join('')}</select></div><textarea id="nb" rows="3" placeholder="見出し：内容" style="width:100%;font:inherit;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);margin-top:6px"></textarea><div class="row"><button class="btn p" data-newmemo="${esc(p.key)}">保存</button></div>
+  <h3>メモ（新しい順・${ms.length}件）</h3><ul class="items">${ms.map(mLi).join('')||'<li>まだありません</li>'}</ul>`;return}
+ const loose=MM.memos.filter(m=>!m.p||m.h==='none').reverse(),ord={動いている:0,ゆっくり:1,止まっている:2,候補:3,完了:4,中止:5};
+ el.innerHTML=`<h2>企画</h2><p class="sub">メモは Claude との会話（コネクタ）か、ここから記録します。黒い点はメモのあった日（5週間）。</p>
+ <ul class="items">${[...MM.projects].sort((a,b)=>(ord[a.state]??9)-(ord[b.state]??9)||a.key.localeCompare(b.key)).map(p=>`<li data-pkey="${esc(p.key)}" style="cursor:pointer"><div class="row" style="justify-content:space-between;margin:0"><b>${esc(p.key)} ${esc(p.name)}</b><span class="badge${p.state==='止まっている'?' r':''}">${esc(p.status==='進行中'?p.state:p.status)}</span></div>${strip(p.key)}<small>メモ ${p.memos}・決定 ${p.decided}・保留/疑問 ${p.open}・${p.quietDays}日前${p.parent?'・前提 '+esc(p.parent):''}</small></li>`).join('')||'<li>企画はまだありません</li>'}</ul>
+ <h3>新しい企画</h3><input id="pnm" placeholder="名前" style="width:100%"><input id="pnt" placeholder="どんな企画か（意味の近さの手がかりになります）" style="width:100%;margin-top:6px"><div class="row"><select id="ppr" style="width:auto"><option value="">前提の企画なし</option>${MM.projects.map(p=>`<option value="${esc(p.key)}">${esc(p.key+' '+p.name)}</option>`).join('')}</select><button class="btn p" id="newproj">作る</button></div>
+ <h3>企画なしのメモ（${loose.length}件）</h3><ul class="items">${loose.slice(0,30).map(mLi).join('')||'<li>ありません</li>'}</ul>`}
+
 function settle(id){const n=PENDING.length;PENDING=PENDING.filter(p=>p.id!==id);if(PENDING.length<n){PTOTAL=Math.max(0,PTOTAL-1);PDONE++}plist();reloadSoon()}
 function pct(x){return Math.round(x*100)+'%'}
 async function runEval(){say('答え合わせ中…');const e=await api('/api/eval');say('');
@@ -149,15 +181,16 @@ async function runEval(){say('答え合わせ中…');const e=await api('/api/ev
  <h3>外れた例</h3><ul class="items">${e.misses.map(m=>`<li>${esc(m.message)}<small>正解 ${esc(m.truth)}・推定 ${esc(m.guess)}（${m.score}）${m.near?'・ほぼ正解':''}</small></li>`).join('')||'<li>ありません</li>'}</ul>`;
  $('#applyEval').onclick=async()=>{const b={issue_auto:e.issue.suggestedAuto??e.autoOff,theme_auto:e.theme.suggestedAuto??e.autoOff};if(e.issue.suggestedAsk)b.issue_ask=e.issue.suggestedAsk;if(e.theme.suggestedAsk)b.theme_ask=e.theme.suggestedAsk;
   await saveSets(b)}}
-const SETS=[['issue_auto','課題：自動'],['issue_ask','課題：確認待ち'],['theme_auto','テーマ：自動'],['theme_ask','テーマ：確認待ち'],['min_sim','手本との近さの下限']];
+const SETS=[['issue_auto','課題：自動'],['issue_ask','課題：確認待ち'],['theme_auto','テーマ：自動'],['theme_ask','テーマ：確認待ち'],['memo_auto','メモ→企画：自動'],['memo_ask','メモ→企画：確認待ち'],['min_sim','手本との近さの下限']];
 async function sets(){const st=await api('/api/settings');
  $('#sets').innerHTML=`<h2>しきい値</h2><p class="sub">確からしさ（票の割合 0〜1）がこれ以上なら自動・確認待ち。自動を 1 より大きくすると「自動なし」。</p>
  <div style="display:grid;grid-template-columns:1fr 110px;gap:6px 10px;align-items:center;margin-top:8px">${SETS.map(([k,l])=>`<label for="s-${k}" style="font-size:14px">${l}${k.endsWith('auto')&&st[k]>1?' <small style="display:inline">（なし）</small>':''}</label><input id="s-${k}" type="number" inputmode="decimal" step="0.05" min="0" max="1.01" value="${st[k]}">`).join('')}</div>
  <div class="row"><button class="btn p" id="saveSets">保存して提案を作り直す</button></div>`}
 async function saveSets(b){await api('/api/settings',{method:'POST',body:JSON.stringify(b)});say('しきい値を保存しました。提案を計算し直します…');const r=await api('/api/suggest',{method:'POST'});await load();await sets();say(`計算し直しました（課題 ${r.commitIssue}・テーマ ${r.commitTheme}・新しい塊 ${r.newClusters}）`)}
-function view(){document.querySelectorAll('.tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===VIEW));['map','pending','eval'].forEach(v=>$('#v-'+v).hidden=v!==VIEW);if(VIEW==='map')draw();if(VIEW==='pending')plist();if(VIEW==='eval')sets().catch(e=>say(e.message))}
+function view(){document.querySelectorAll('.tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===VIEW));['map','pending','proj','eval'].forEach(v=>$('#v-'+v).hidden=v!==VIEW);if(VIEW==='proj')projView();if(VIEW==='map')draw();if(VIEW==='pending')plist();if(VIEW==='eval')sets().catch(e=>say(e.message))}
 function all(){draw();detail();plist()}
-async function load(){try{M=await api('/api/map');const pd=await api('/api/pending');PENDING=pd.items;PTOTAL=pd.total;PDONE=0;$('#gate').hidden=true;index();all();if(!M.commits.length)say('まだデータがありません。「取り込み直す」を押してください。')}catch(e){say(e.message)}}
+async function load(){try{M=await api('/api/map');await loadMemos();const pd=await api('/api/pending');PENDING=pd.items;PTOTAL=pd.total;PDONE=0;$('#gate').hidden=true;index();all();if(!M.commits.length&&!MM.memos.length)say('まだデータがありません。「取り込み直す」を押してください。');if(VIEW==='proj')projView()}catch(e){say(e.message)}}
+document.addEventListener('click',e=>{const li=e.target.closest('[data-pkey]');if(li&&!e.target.closest('a,button,select')){PSEL=li.dataset.pkey;projView();window.scrollTo(0,0)}});
 fig.addEventListener('click',e=>{if(e.target.closest('#pop'))return;const dot=e.target.closest('[data-dot]');
  if(dot){const r=fig.getBoundingClientRect(),c=dot.getBoundingClientRect();sel=dot.dataset.dk;draw();detail();pop(sel,dot.dataset.lo,dot.dataset.hi,c.left+c.width/2-r.left,c.top+c.height/2-r.top);return}
  const g=e.target.closest('g[data-k]');if(!g)return;const k=g.dataset.k;if(k.startsWith('T:')){const c=k.slice(2);if(sel===k||!open.has(c)){open.has(c)?open.delete(c):open.add(c)}}sel=k;draw();detail()});
@@ -170,6 +203,12 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.id==='sync'){b.disabled=true;say('Linear と GitHub から取り込み、埋め込みと提案を計算しています…');const r=await api('/api/sync',{method:'POST'});
   say(`取り込み：課題 ${r.linear.issues}・コミット ${r.github.commits}／埋め込み ${r.embeddings.embedded}件／提案：課題 ${r.suggestions.commitIssue}・テーマ ${r.suggestions.commitTheme}・新しい塊 ${r.suggestions.newClusters}`);b.disabled=false;await load();return}
  if(b.id==='runEval'){await runEval();return}
+ if(b.dataset.pback){PSEL=null;projView();return}
+ if(b.id==='newproj'){const name=$('#pnm').value.trim();if(!name)return say('企画の名前を入れてください');b.disabled=true;const r=await api('/api/projects',{method:'POST',body:JSON.stringify({name,note:$('#pnt').value,parent:$('#ppr').value||null})});await loadMemos();PSEL=r.key;projView();say(`企画 ${r.key} を作りました`);return}
+ if(b.dataset.newmemo){const body=$('#nb').value.trim();if(!body)return;b.disabled=true;await api('/api/memos',{method:'POST',body:JSON.stringify({body,kind:$('#nk').value,project:b.dataset.newmemo})});await loadMemos();projView();say('メモを保存しました');return}
+ if(b.dataset.approveai){b.disabled=true;const r=await api('/api/memo-approve-ai',{method:'POST',body:JSON.stringify({project:b.dataset.approveai})});await loadMemos();projView();say(`${r.approved}件を承認しました`);return}
+ if(b.dataset.mcmake){const name=$('#mcname').value.trim();if(!name)return say('企画の名前を入れてください');b.disabled=true;const p=PENDING.find(x=>x.id===b.dataset.mcmake);const r=await api('/api/projects',{method:'POST',body:JSON.stringify({name})});
+  for(const id of p.detail.members||[])await api('/api/memo-assign',{method:'POST',body:JSON.stringify({memo:id,project:r.key})});await api('/api/decide',{method:'POST',body:JSON.stringify({id:p.id,decision:'accept'})});await loadMemos();settle(p.id);say(`企画 ${r.key} ${name} を作りました`);return}
  if(b.id==='saveSets'){const o={};for(const [k] of SETS){const v=parseFloat($('#s-'+k).value);if(Number.isFinite(v))o[k]=v}b.disabled=true;await saveSets(o);return}
  if(b.dataset.dec){b.disabled=true;const body={id:b.dataset.id,decision:b.dataset.dec};if(b.dataset.target)body.target=b.dataset.target;await api('/api/decide',{method:'POST',body:JSON.stringify(body)});closePop();
   if(VIEW==='pending'){settle(b.dataset.id);return}await load();say(b.dataset.dec==='accept'?'承認しました':'却下しました');return}
@@ -177,7 +216,9 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(b.id==='unskip'){PSKIP.clear();plist();return}
  if(b.dataset.per){PER=+b.dataset.per;try{localStorage.setItem('idea-flow-per',PER)}catch(_){}index();segs();closePop();draw();return}
  }catch(err){say(err.message);b.disabled=false}});
-document.addEventListener('change',async e=>{const t=e.target;if(!t.dataset||!t.dataset.assign||!t.value)return;t.disabled=true;
+document.addEventListener('change',async e=>{const t=e.target;
+ if(t.dataset&&t.dataset.massign&&t.value){t.disabled=true;try{await api('/api/memo-assign',{method:'POST',body:JSON.stringify({memo:t.dataset.massign,project:t.value==='-'?null:t.value})});if(t.dataset.id&&VIEW==='pending'){await loadMemos();settle(t.dataset.id)}else{await loadMemos();projView()}say('決めました')}catch(err){say(err.message);t.disabled=false}return}
+ if(t.dataset&&t.dataset.pstatus){try{const p=MM.projects.find(x=>x.key===t.dataset.pstatus);await api('/api/projects',{method:'POST',body:JSON.stringify({key:p.key,status:t.value})});await loadMemos();projView();say('状態を変えました')}catch(err){say(err.message)}return}if(!t.dataset||!t.dataset.assign||!t.value)return;t.disabled=true;
  try{await api('/api/assign',{method:'POST',body:JSON.stringify({sha:t.dataset.assign,theme:t.value})});await api('/api/decide',{method:'POST',body:JSON.stringify({id:t.dataset.id,decision:'reject'})});settle(t.dataset.id)}catch(err){say(err.message);t.disabled=false}});
 function segs(){document.querySelectorAll('[data-per]').forEach(b=>b.setAttribute('aria-pressed',+b.dataset.per===PER))}
 try{const v=+localStorage.getItem('idea-flow-per');if([14,35,91].includes(v))PER=v}catch(_){}segs();

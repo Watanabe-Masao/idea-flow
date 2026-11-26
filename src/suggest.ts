@@ -13,6 +13,7 @@ export async function loadSettings(env: Env): Promise<Settings> {
     cluster_link: n('cluster_link', 0.7), cluster_min: n('cluster_min', 3),
     premise_min: n('premise_min', 0.7),
     min_sim: n('min_sim', 0.5),
+    memo_auto: n('memo_auto', 1.01), memo_ask: n('memo_ask', 0.4),
   };
 }
 
@@ -200,7 +201,7 @@ export async function computeSuggestions(env: Env) {
 
   // 消す → 入れる を1回のバッチで（途中で失敗したら全部取り消される）
   await env.DB.batch([
-    env.DB.prepare("DELETE FROM suggestions WHERE status IN ('auto','pending')"),
+    env.DB.prepare("DELETE FROM suggestions WHERE status IN ('auto','pending') AND kind NOT LIKE 'memo%'"),
     ...bulkInsert(env.DB, INSERT_HEAD, 8, rows),
   ]);
   return { commitIssue: nIssue, commitTheme: nTheme, newClusters: groups.length, themePremise: nPremise, unassigned: unassigned.length };
