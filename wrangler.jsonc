@@ -9,8 +9,7 @@
     {
       "binding": "DB",
       "database_name": "idea-flow",
-      // wrangler d1 create idea-flow の結果の id に置き換える
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "bcec0d34-633d-44c4-8e3c-bb9efb96ce1c",
       "migrations_dir": "migrations"
     }
   ],
