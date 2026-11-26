@@ -8,41 +8,7 @@ import { dot, type Vec } from './vec.ts';
 import { bulkInsert, nowIso, sha256 } from './util.ts';
 import { diagnose } from './diagnosis.ts';
 import { effective, excluded, scopeTree } from './scopes.ts';
-
-const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
-
-function ghHeaders(env: Env, raw = false): Record<string, string> {
-  const h: Record<string, string> = { accept: raw ? 'application/vnd.github.raw' : 'application/vnd.github+json', 'user-agent': 'idea-flow', 'x-github-api-version': '2022-11-28' };
-  if (env.GITHUB_TOKEN) h.authorization = `Bearer ${env.GITHUB_TOKEN}`;
-  return h;
-}
-async function gh<T>(env: Env, path: string, raw = false): Promise<T> {
-  const res = await fetch('https://api.github.com' + path, { headers: ghHeaders(env, raw) });
-  if (!res.ok) throw new Error(`GitHub: ${res.status} ${(await res.text()).slice(0, 200)}`);
-  return (raw ? await res.text() : await res.json()) as T;
-}
-
-/**
- * たくさんのファイルを少ない回数で読む。GitHub の GraphQL なら1回で約40ファイル読める
- * （Workers は1回の処理で外へ出せる数に限りがあるので、1ファイル1回の読み方を避ける）。
- * トークンが無いときや失敗したときは null（呼ぶ側が1つずつ読む）。
- */
-async function readMany(env: Env, repo: string, branch: string, paths: string[]): Promise<Map<string, string> | null> {
-  if (!env.GITHUB_TOKEN || !paths.length) return null;
-  const [owner, name] = repo.split('/');
-  const out = new Map<string, string>();
-  for (let i = 0; i < paths.length; i += 40) {
-    const part = paths.slice(i, i + 40);
-    const q = `query($o:String!,$n:String!){repository(owner:$o,name:$n){${part.map((p, k) => `f${k}:object(expression:${JSON.stringify(`${branch}:${p}`)}){...on Blob{text}}`).join(' ')}}}`;
-    const res = await fetch('https://api.github.com/graphql', { method: 'POST', headers: { ...ghHeaders(env), 'content-type': 'application/json' }, body: JSON.stringify({ query: q, variables: { o: owner, n: name } }) });
-    if (!res.ok) return null;
-    const j = await res.json() as { data?: { repository?: Record<string, { text: string | null } | null> }; errors?: unknown };
-    const r = j.data?.repository;
-    if (!r) return null;
-    part.forEach((p, k) => { const t = r[`f${k}`]?.text; if (typeof t === 'string') out.set(p, t); });
-  }
-  return out;
-}
+import { gh, readMany, REPO_RE } from './gh.ts';
 
 type Source = { repo: string; branch: string; files: string[]; synced_at: string | null };
 export async function sources(env: Env): Promise<Source[]> {

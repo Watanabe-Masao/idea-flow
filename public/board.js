@@ -119,6 +119,7 @@ function draw() {
   if (S.sum && S.sum.left) h += `<p class="sub" style="margin-top:6px">要約を作っています（あと ${S.sum.left}）…</p>`;
   if (S.error) h += `<p style="color:var(--red);font-size:14px">この変更はそのままでは反映できません：${esc(S.error)}</p>`;
   h += pend.map(reqHtml).join('');
+  if (t.length) h += `<div class="bd-shelf" style="border:2px solid var(--ink)"><h3>Claude に届ける</h3><p class="bd-ssum">範囲の木から CLAUDE.md の「決まりの道案内」を作り、承認した書き換えといっしょに PR として出します。マージはあなたがします。</p><div class="row"><button class="btn s p" data-bexport="1">書き出す内容を見る</button></div></div>`;
   h += `<div class="bd-seg" role="group" aria-label="表示"><button data-bview="shelf" aria-pressed="${S.view === 'shelf'}">棚で見る</button><button data-bview="circle" aria-pressed="${S.view === 'circle'}">円で見る</button></div>`;
   if (!t.length) {
     h += `<div class="bd-shelf"><p style="margin:0">範囲の木はまだありません。</p><div class="row"><button class="btn s p" data-bsuggest="1">木の案を作る</button><button class="btn s" data-baddunder="root">最初の棚を作る</button></div><p class="sub" style="margin-top:6px">木の案は、参照のつながりとスキルの名前から作るたたき台です。「変更」にたまるので、直してから確定できます。</p></div>`;
@@ -328,6 +329,7 @@ function scopeSheet(r, sid) {
   ${s.key !== 'root' ? `<div class="row"><input id="bd-rn" value="${esc(s.name)}" style="flex:1 1 160px"><button class="btn s" data-brename="${esc(s.key)}">名前を変える</button></div>
   <div class="row"><select id="bd-mv" style="flex:1 1 160px"><option value="">親を選ぶ…</option>${others.map(o => `<option value="${esc(o.key)}">${esc(o.name)}</option>`).join('')}</select><button class="btn s" data-bmove="${esc(s.key)}">この下へ動かす</button></div>` : ''}
   <div class="row"><button class="btn s" data-baddunder="${esc(s.key)}">＋ 下に棚を足す</button>${s.key !== 'root' && !kidsOf(t, sid).length ? `<button class="btn s" data-bremove="${esc(s.key)}">この棚をなくす</button>` : ''}</div>
+  ${isCommitted ? `<div class="row"><button class="btn s" data-bproject="${esc(s.key)}">claude.ai のプロジェクト用の指示文</button></div>` : ''}
   ${isCommitted ? `<details style="margin-top:10px" data-bcontract="${esc(s.key)}"><summary class="sub" style="cursor:pointer;min-height:36px">この範囲で Claude に渡す内容</summary><div class="bd-otext" style="white-space:pre-wrap">読み込み中…</div></details>` : ''}
   ${closeRow}`);
 }
@@ -382,6 +384,36 @@ async function promptSheet(r, body, back) {
   try {
     const x = await api('/api/requests/prompt', { method: 'POST', body: JSON.stringify({ repo: r, ...body }) });
     sh.innerHTML = `<h2>Claude に渡す文</h2><p class="sub">原文・書き換えたあと・効いている範囲・意味の近い決まり・答え方を、自動でまとめました（約${x.text.length.toLocaleString()}字）。相談に出したものは、コネクタの Claude が直接読めます。</p><textarea id="bd-ctext" class="bd-ta" readonly style="height:50vh;margin-top:10px;font:12.5px/1.5 ui-monospace,monospace">${esc(x.text)}</textarea><div class="row"><button class="btn p" data-bcopy="1" style="flex:1">コピー</button>${back ? `<button class="btn" data-bback="${esc(back)}">戻る</button>` : '<button class="btn" data-bclose="1">閉じる</button>'}</div>`;
+  } catch (e) { sh.innerHTML = `<p style="color:var(--red)">${esc(e.message)}</p>${closeRow}`; }
+}
+
+// ── 届ける（書き出し） ──
+async function exportSheet(r) {
+  const sh = sheet('<p class="sub">書き出す内容を作っています…</p>');
+  try {
+    const x = await api('/api/export/preview?repo=' + encodeURIComponent(r));
+    const cm = x.files.find(f => f.path === 'CLAUDE.md'), others = x.files.filter(f => f.path !== 'CLAUDE.md');
+    const block = cm ? cm.after.slice(cm.after.indexOf('<!-- idea-flow:start -->')) : '';
+    sh.innerHTML = `<h2>Claude に届ける</h2><p class="sub">${esc(r)}（${esc(x.branch)}）に、PR として出す内容です。</p>
+    ${x.notes.map(n => `<p class="sub">${esc(n)}</p>`).join('')}
+    ${cm ? `<h4>CLAUDE.md ${cm.before == null ? '<span class="badge">新しいファイル</span>' : '<span class="badge">印の間だけ書き換え</span>'}</h4><p class="sub">Claude Code は CLAUDE.md を毎回自動で読みます。ここに道案内があると、作業の範囲に合った決まりを読んでから進めます。</p><div class="bd-otext" style="white-space:pre-wrap;font:12.5px/1.55 ui-monospace,monospace">${esc(block)}</div>` : (x.files.length || !x.notes.length ? '<p class="sub" style="margin-top:8px">CLAUDE.md の道案内は、もう最新です。</p>' : '')}
+    ${x.edits.length ? `<h4>承認した書き換え</h4>${x.edits.map(e => `<div class="bd-opt" style="display:block">${esc(e.path)}「${esc(e.heading || '見出しの前')}」<small style="color:${e.ok ? 'inherit' : 'var(--red)'}">${e.ok ? 'PR に入れます' : '入れません：' + esc(e.reason)}</small></div>`).join('')}` : ''}
+    ${others.length ? `<p class="sub">書き換えるファイル：${others.map(f => esc(f.path)).join('、')}</p>` : ''}
+    ${!x.canWrite ? '<p style="color:var(--red);font-size:14px">書き込み用の鍵（GITHUB_WRITE_TOKEN）がまだ無いので、PR は出せません。</p>' : ''}
+    <div class="row" style="margin-top:12px"><button class="btn p" data-bpr="1" style="flex:1" ${!x.canWrite || !x.files.length ? 'disabled' : ''}>PR を出す</button><button class="btn" data-bclose="1">閉じる</button></div>`;
+  } catch (e) { sh.innerHTML = `<p style="color:var(--red)">${esc(e.message)}</p>${closeRow}`; }
+}
+async function exportPr(r, b) {
+  b.disabled = true; b.textContent = 'PR を出しています…';
+  const x = await api('/api/export/pr', { method: 'POST', body: JSON.stringify({ repo: r }) });
+  sheet(`<h2>PR を出しました</h2><p><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a></p><p class="sub">中身を確かめて、よければ GitHub でマージしてください。マージすると、次の作業から Claude が道案内を読みます。</p>${x.skipped.length ? `<p class="sub">入れなかった書き換え：${x.skipped.map(e => esc(e.path + '「' + e.heading + '」：' + e.reason)).join('、')}</p>` : ''}${closeRow}`);
+  await load(r); draw();
+}
+async function projectSheet(r, key) {
+  const sh = sheet('<p class="sub">作っています…</p>');
+  try {
+    const x = await api(`/api/export/project?repo=${encodeURIComponent(r)}&scope=${encodeURIComponent(key)}`);
+    sh.innerHTML = `<h2>プロジェクト用の指示文</h2><p class="sub">claude.ai でこの範囲の話をするプロジェクトを作り、その「指示」に貼ってください。会話のたびに、Claude がコネクタでこの範囲の決まりを読みます（決まりを変えても、貼り直さなくて大丈夫です）。プロジェクトのメモリを「このプロジェクトだけ」にすると、ほかの話が混ざりにくくなります。</p><textarea id="bd-ctext" class="bd-ta" readonly style="height:34vh;margin-top:10px">${esc(x.text)}</textarea><div class="row"><button class="btn p" data-bcopy="1" style="flex:1">コピー</button><button class="btn" data-bclose="1">閉じる</button></div>`;
   } catch (e) { sh.innerHTML = `<p style="color:var(--red)">${esc(e.message)}</p>${closeRow}`; }
 }
 
@@ -461,6 +493,9 @@ document.addEventListener('click', async e => {
     if (D.bclose) { close(); return; }
     if (D.bdoc) { docSheet(r, D.bdoc, D.bin || null, D.binh === '1'); return; }
     if (D.bscope) { scopeSheet(r, D.bscope); return; }
+    if (D.bexport) { await exportSheet(r); return; }
+    if (D.bpr) { await exportPr(r, b); return; }
+    if (D.bproject) { await projectSheet(r, D.bproject); return; }
     if (D.bsuggest) { b.disabled = true; b.textContent = '案を作っています…'; const x = await api('/api/scopes/suggest', { method: 'POST', body: JSON.stringify({ repo: r }) }); await setOps(r, [...st(r).ops, ...x.ops]); say(`木の案を「変更」に入れました（${x.ops.length}件）。直してから確定してください。`); return; }
     if (D.baddunder) { nameSheet(r, D.baddunder); return; }
     if (D.bmk) { const v = ($('#bd-nn').value || '').trim(); if (!v) return; close(); await setOps(r, [...st(r).ops, { op: 'add_scope', key: newKey(), name: v, parent: D.bmk }]); return; }
