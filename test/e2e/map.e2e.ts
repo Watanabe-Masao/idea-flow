@@ -82,6 +82,38 @@ for (const k of kinds) {
     await pg.close();
   });
 
+  test(`${k}・今日：読み込み中にリポジトリを切り替えても、前のリポジトリのカードを出さず、判断は表示中のリポジトリに残す`, async () => {
+    const { pg, errs } = await open(b!, 390, 'today');
+    await pg.waitForSelector('.td-it');
+    // 別のリポジトリ（o/other）の答えは遅れて届く。同じ番号の Issue を持たせる
+    await pg.route('**/api/today?repo=o%2Fother', async r => { await new Promise(z => setTimeout(z, 1200)); await r.fulfill({ json: { repo: 'o/other', catalog: true, since: '2026-11-20', changes: [], decided: 0,
+      items: [{ key: 'close:53:x', kind: 'close', title: '#53 よそのリポジトリの Issue', sub: '', url: 'https://github.com/o/other/issues/53' }] } }); });
+    const marks: string[] = [];
+    pg.on('request', q => { if (q.url().endsWith('/api/today/mark')) marks.push(q.postData() || ''); });
+    await pg.evaluate(() => { const el = document.querySelector('#rtoday')!; (window as any).Today.render(el, 'o/other'); (window as any).Today.render(el, 'Watanabe-Masao/idea-flow'); });
+    await pg.waitForTimeout(1600); // 遅れた o/other の答えが届いたあと
+    assert.doesNotMatch(await pg.innerText('#rtoday'), /よそのリポジトリ/);
+    await pg.locator('.td-it button[data-mark]').first().click();
+    await pg.waitForTimeout(200);
+    assert.equal(marks.length, 1);
+    assert.equal(JSON.parse(marks[0]).repo, REPO);
+    assert.deepEqual(errs, []);
+    await pg.close();
+  });
+
+  test(`${k}・今日：閉じてよさそうな Issue は、GitHub で開くだけでは消えない`, async () => {
+    const { pg, errs } = await open(b!, 390, 'today');
+    await pg.waitForSelector('.td-it');
+    const n0 = await pg.locator('.td-it').count();
+    const ghLink = pg.locator('.td-it a:has-text("GitHub で開く")').first();
+    assert.equal(await ghLink.getAttribute('data-mark'), null);
+    await pg.evaluate(() => { document.querySelectorAll('.td-it a[target=_blank]').forEach(a => a.removeAttribute('target')); document.querySelectorAll('.td-it a').forEach(a => a.addEventListener('click', e => e.preventDefault())); });
+    await ghLink.click();
+    assert.equal(await pg.locator('.td-it').count(), n0);
+    assert.deepEqual(errs, []);
+    await pg.close();
+  });
+
   test(`${k}・PC：3つの見方を開いてもエラーが出ない`, async () => {
     const { pg, errs } = await open(b!, 1100);
     await pg.click('[data-view="cluster"]');
