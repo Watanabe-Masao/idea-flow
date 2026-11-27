@@ -48,6 +48,8 @@
 ```sh
 npm run typecheck
 npm test            # テスト（D1 と Workers AI は test/fakeenv.ts の代わりを使う）
+npm run test:e2e    # 画面のテスト（地図の3つの見方をスマホと PC の幅で開く。GitHub は test/e2e/fixture.json の写しで答える。
+                    # 初めては npx playwright install chromium webkit。PR ごとに CI でも Chromium と WebKit で走る）
 npm run dev         # ローカル。Workers AI はリモートを使う
 ```
 
