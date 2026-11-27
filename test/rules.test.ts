@@ -129,11 +129,16 @@ test('入口が無いときは「入口が無い」1件にまとめ、入口の�
 });
 
 
-test('とても近くても片方だけが否定なら、重複ではなく食い違いの候補（#46）', async () => {
+for (const [name, b, want] of [
+  ['使わない', '使わない', 'conflict'],
+  ['使わなくてよい（任意）', '使わなくてよい', 'conflict'],
+  ['使ってもよい（任意）', '使ってもよい', 'conflict'],
+  ['同じ言い方', '使う', 'duplicate'],
+] as const) test(`とても近い2つ：「使う」と「${name}」→ ${want}（#46）`, async () => {
   const files: Record<string, string> = {
     'CLAUDE.md': '# 全体\n- 決まりは docs/a.md と docs/b.md を読む\n',
     'docs/a.md': '# 表\n- 表の列は画面の幅に合わせて六つまでにし、横に送る作りを使う\n',
-    'docs/b.md': '# 表\n- 表の列は画面の幅に合わせて六つまでにし、横に送る作りを使わない\n',
+    'docs/b.md': `# 表\n- 表の列は画面の幅に合わせて六つまでにし、横に送る作りを${b}\n`,
   };
   const real = globalThis.fetch;
   globalThis.fetch = (async (u: string | URL) => {
@@ -148,6 +153,6 @@ test('とても近くても片方だけが否定なら、重複ではなく食�
     await saveSource(env, 'o/r', Object.keys(files));
     await syncRules(env, 'o/r');
     const pair = (await rulesView(env)).findings.filter(x => x.b).map(x => x.kind); // 2つの決まりの組の問題
-    assert.deepEqual(pair, ['conflict']);
+    assert.deepEqual(pair, [want]);
   } finally { globalThis.fetch = real; }
 });
