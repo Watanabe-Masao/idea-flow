@@ -275,15 +275,16 @@ export type Link = { kind: 'closes' | 'ref' | 'parent' | 'child' | 'from' | 'to'
  *   ほかの Issue を番号で指している PR・「関連：なし」と書いた PR・見た目・文書・テストだけの PR は出さない。
  *   Issue を立てた時刻より後にマージしたもの（日付ではなく時刻で比べる）。新しいもの5件まで
  */
-export function issueLinks(repo: string, issues: { number: number; open: boolean; title: string; created: string; closed: string | null; features: string[]; refs: { n: number; line: string }[]; parent?: number | null }[],
+export function issueLinks(repo: string, issues: { number: number; open: boolean; title: string; created: string; closed: string | null; features: string[]; refs: { n: number; line: string }[]; parent?: number | null; url?: string }[],
   prs: (Pr & { features: string[] })[]) {
   const iss = new Map(issues.map(i => [i.number, i])), pr = new Map(prs.map(p => [p.number, p]));
   const out = new Map<number, Link[]>(issues.map(i => [i.number, []]));
   const add = (to: number, l: Link) => { const L = out.get(to)!; const same = L.find(x => x.type === l.type && x.n === l.n && (x.kind === l.kind || (x.kind === 'closes' && l.kind === 'ref')));
     if (same) { for (const e of l.evidence) if (!same.evidence.includes(e)) same.evidence.push(e); } else L.push(l); };
   const prLink = (p: Pr, kind: Link['kind'], ev: string): Link => ({ kind, type: 'pr', n: p.number, title: p.title, day: jstDay(p.merged_at), url: p.url, evidence: [ev] });
-  const isLink = (i: { number: number; title: string; created: string; closed: string | null; open: boolean }, kind: Link['kind'], ev: string): Link =>
-    ({ kind, type: 'issue', n: i.number, title: i.title, day: jstDay(i.created), url: `https://github.com/${repo}/issues/${i.number}`, open: i.open, evidence: [ev] });
+  // Issue のリンク先は、その Issue 自身の URL（プロジェクトでは番号がずれているので、番号から作らない。#77）
+  const isLink = (i: { number: number; title: string; created: string; closed: string | null; open: boolean; url?: string }, kind: Link['kind'], ev: string): Link =>
+    ({ kind, type: 'issue', n: i.number, title: i.title, day: jstDay(i.created), url: i.url || `https://github.com/${repo}/issues/${i.number}`, open: i.open, evidence: [ev] });
   const explicit = new Set<number>(); // どこかの Issue を番号で指している PR
   for (const p of prs) {
     for (const n of p.closes) if (iss.has(n)) { add(n, prLink(p, 'closes', `PR #${p.number} がこの Issue を閉じた`)); explicit.add(p.number); }
@@ -361,7 +362,8 @@ export function prDigest(body: string): string {
   for (const raw of String(body ?? '').split(/\r?\n/)) {
     const line = raw.trim();
     if (/^(```|~~~)/.test(line)) { fence = !fence; out.push(raw); continue; }
-    const ref = REF_RE.test(raw); REF_RE.lastIndex = 0;
+    // 番号の行：#n のほか、別のリポジトリへの参照（owner/name#n・name#n）と GitHub の Issue・PR の URL も残す（#77：プロジェクトで、リポジトリをまたいでつなぐため）
+    const ref = REF_RE.test(raw) || /[\w.-]#\d+\b/.test(raw) || /github\.com\/[\w.-]+\/[\w.-]+\/(issues|pull)\/\d+/.test(raw); REF_RE.lastIndex = 0;
     if (!ref && (/^\s*(?:[-*]\s*)?\**タグ\**\s*[:：]/.test(raw) || /関連\s*[:：]\s*$/.test(raw))) continue;
     const keep = ref || /関連|機能\**\s*[:：]/.test(raw);
     if (fence) { if (keep) out.push(raw); continue; }
@@ -444,7 +446,7 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   const old = addDays(today, -7);
   const rows = (ir.results as (Issue & { repo: string })[]).map(i => { const ix = idxOf(i.repo); return multi ? { ...i, number: Q(ix, i.number), body: qText(i.body, ix, members), refs: JSON.stringify(refLines(qText(i.body, ix, members))), parent: i.parent ? Q(ix, i.parent) : i.parent, url: `https://github.com/${i.repo}/issues/${i.number}` } : { ...i, url: `https://github.com/${i.repo}/issues/${i.number}` }; });
   const linked = rows.map(i => ({ i, l: linkIssue(cat, i) }));
-  const links = issueLinks(repo, linked.map(({ i, l }) => ({ number: i.number, open: !!i.open, title: i.title, created: i.created, closed: i.closed, features: l.features.filter(id => !cat.features.find(f => f.id === id)?.fallback), refs: JSON.parse(i.refs || '[]'), parent: i.parent ?? null })),
+  const links = issueLinks(repo, linked.map(({ i, l }) => ({ url: (i as { url?: string }).url, number: i.number, open: !!i.open, title: i.title, created: i.created, closed: i.closed, features: l.features.filter(id => !cat.features.find(f => f.id === id)?.fallback), refs: JSON.parse(i.refs || '[]'), parent: i.parent ?? null })),
     prs.map(p => ({ ...p, features: of.get(p.number)!.filter(id => !cat.features.find(f => f.id === id)?.fallback) })));
   const issues = linked.map(({ i, l }) => {
     const fs = l.features.filter(id => stOf.has(id));
