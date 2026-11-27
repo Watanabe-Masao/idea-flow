@@ -33,6 +33,8 @@ function featureOfTitle(cat: Catalog, title: string) {
 const names = (cat: Catalog) => cat.features.map(f => `${f.name.replace(/（.*）/, '')}${f.aliases.length ? `（別名：${f.aliases.slice(0, 3).join('・')}）` : ''}`).join('、');
 
 /** 本文の「タグ：」：3つまで／新しい話題なら、似た既存のタグ・機能名を知らせる */
+/** 似たタグを見つけるための文字そろえ（#49）：全角・半角、ひらがな・カタカナ、「・」と空白の違いを無くす */
+export const normTag = (t: string) => t.normalize('NFKC').replace(/[ぁ-ゖ]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60)).replace(/[・･\s　]/g, '').toLowerCase();
 function checkTags(cat: Catalog, body: string, known: Set<string>): Item[] {
   const tags = tagsOf(body);
   if (!tags.length) return [];
@@ -40,7 +42,8 @@ function checkTags(cat: Catalog, body: string, known: Set<string>): Item[] {
   const { topics } = splitTags(cat, tags);
   const pool = [...known, ...cat.features.flatMap(f => [f.name.replace(/（.*）/, ''), ...f.aliases])];
   for (const t of topics.filter(t => !known.has(t))) {
-    const like = [...new Set(pool.filter(k => k !== t && (k.includes(t) || t.includes(k))))].slice(0, 3);
+    const nt = normTag(t);
+    const like = [...new Set(pool.filter(k => k !== t && (normTag(k).includes(nt) || nt.includes(normTag(k)))))].slice(0, 3);
     out.push({ ok: null, what: `「${t}」は新しい話題${like.length ? `。既にある「${like.join('」「')}」のことなら、そちらを使う` : '（毎日の見直しで、機能に上げるか・別名にまとめるか・話題のままかを人が決める）'}` });
   }
   return out;
