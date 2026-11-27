@@ -50,6 +50,19 @@ for (const k of kinds) {
     await pg.close();
   });
 
+  test(`${k}・スマホ：文書の画面の「気になる所」から、Issue の下書きを開ける（#9）`, async () => {
+    const { pg, errs } = await open(b!, 390);
+    await pg.getByText('文書', { exact: true }).first().click();
+    await pg.getByText('詳しく見る').first().click();
+    const href = await pg.locator('a:has-text("Issue の下書きを開く")').first().getAttribute('href');
+    const u = new URL(href!);
+    assert.equal(u.pathname, `/${REPO}/issues/new`);
+    assert.match(u.searchParams.get('title')!, /^決まりと文書：/);
+    assert.match(u.searchParams.get('body')!, /^機能：決まりと文書\n閉じる条件：/);
+    assert.deepEqual(errs, []);
+    await pg.close();
+  });
+
   test(`${k}・PC：3つの見方を開いてもエラーが出ない`, async () => {
     const { pg, errs } = await open(b!, 1100);
     await pg.click('[data-view="cluster"]');
