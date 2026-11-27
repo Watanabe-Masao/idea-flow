@@ -46,7 +46,7 @@ async function api(path,opt={}){const r=await fetch(path,{...opt,headers:{'conte
  if(r.status===401){$('#gate').hidden=false;throw new Error('合言葉を入れてください')}const b=await r.json();if(!r.ok)throw new Error(b.error||r.status);return b}
 const say=t=>{$('#msg').textContent=t};
 // ── 決まりの診断（#7・#8） ──
-let RV=null,RDOC=null,ROPEN=new Set(),RREPO='',RSUB='map';
+let RV=null,RDOC=null,ROPEN=new Set(),RREPO='',RSUB='today';
 const APPLIES={always:'自動で届く',role:'役割として届く',skill:'場面に合えば届く（スキル）',referenced:'渡さないと届かない'};
 const FK={no_entry:'入口が無い',unreferenced:'入口からたどれない',duplicate:'同じことが2か所',definition:'同じ言葉を2か所で説明',conflict:'食い違いかもしれない',temporary:'終わったかもしれない',skill_overlap:'似た場面で呼ばれるスキル',dead_ref:'もう無いファイルを指している',skill_unused:'使っていない技術向けのスキル',orphan:'どこからも案内されていない'};
 async function loadRules(){RV=await api('/api/rules');rulesView()}
@@ -82,7 +82,8 @@ function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">�
  const repos=[...new Set([...RV.sources.map(s=>s.repo),...RV.docs.map(d=>d.repo)])];
  if(!RREPO||!repos.includes(RREPO))RREPO=repos.find(x=>RV.docs.some(d=>d.repo===x))||repos[0]||'';
  const head=`<div class="row" style="margin:0">${repos.length>1?`<select id="rrepo" style="flex:1 1 200px" aria-label="リポジトリ">${repos.map(x=>`<option ${x===RREPO?'selected':''}>${esc(x)}</option>`).join('')}</select>`:`<b>${esc(RREPO||'リポジトリはまだありません')}</b>`}</div>
- <div class="tabs" role="tablist" style="margin-top:8px">${[['map','地図'],['docs','文書']].map(([k,l])=>`<button class="tab" role="tab" data-rsub="${k}" aria-selected="${RSUB===k}">${l}</button>`).join('')}</div>`;
+ <div class="tabs" role="tablist" style="margin-top:8px">${[['today','今日'],['map','地図'],['docs','文書']].map(([k,l])=>`<button class="tab" role="tab" data-rsub="${k}" aria-selected="${RSUB===k}">${l}</button>`).join('')}</div>`;
+ if(RSUB==='today'&&RREPO){el.innerHTML=head+'<div id="rtoday" style="margin-top:10px"></div>';window.Today.render($('#rtoday'),RREPO);return}
  if(RSUB==='map'&&RREPO){el.innerHTML=head+'<div id="rmap" style="margin-top:10px"></div>';window.WorkMap.render($('#rmap'),RREPO);return}
  el.innerHTML=head+`<h2 style="margin-top:12px">文書</h2><p class="sub">リポジトリの決まりの文書（CLAUDE.md・スキル・docs など）の一覧と、Claude への届き方、気になる所（重複・食い違い・古い決まり・どこからも読まれない文書）。読むだけで、GitHub には書き込みません。</p>
  ${RV.stale?`<div style="border:1px solid var(--red);border-radius:10px;padding:10px 12px;margin-top:10px"><b>診断の仕方が新しくなりました</b><p class="sub" style="margin:4px 0">下の結果は古い仕方のままです。取り込み直すと新しい診断になります。</p><div class="row">${[...new Set(RV.docs.map(d=>d.repo))].map(r=>`<button class="btn s p" data-rsync="${esc(r)}">${esc(r.split('/')[1])} を取り込み直す</button>`).join('')}</div></div>`:''}
@@ -121,4 +122,4 @@ async function load(){try{$('#gate').hidden=true;await loadRules()}catch(e){say(
 window.IF={api,esc,say,rv:()=>RV,reload:()=>loadRules(),files:r=>pickFiles(r)};
 if(!TOK)$('#gate').hidden=false;else load();
 }
-</script><script src="map.js"></script></body></html>
+</script><script src="map.js"></script><script src="today.js"></script></body></html>

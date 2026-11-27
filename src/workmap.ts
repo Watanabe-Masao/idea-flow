@@ -395,13 +395,15 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   const issues = linked.map(({ i, l }) => {
     const fs = l.features.filter(id => stOf.has(id));
     const stale = !!i.open && fs.length > 0 && fs.every(id => stOf.get(id) === 2) && jstDay(i.updated) < old;
-    return { number: i.number, open: !!i.open, title: i.title, created: jstDay(i.created), updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale, links: links.get(i.number) ?? [], topics: topicsOf(cat, i.title, i.body) };
+    return { number: i.number, open: !!i.open, title: i.title, created: jstDay(i.created), updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale, links: links.get(i.number) ?? [], topics: topicsOf(cat, i.title, i.body), cond: (i.body.match(/閉じる条件\s*[:：]\s*(.+)/)?.[1] ?? '').trim().slice(0, 200) };
   });
   const inSpan = prs.filter(p => idx.has(jstDay(p.merged_at)));
   const writing = writingCheck(cat, inSpan, rows.filter(i => idx.has(jstDay(i.created))), links);
   const unmatched = inSpan.filter(p => !of.get(p.number)!.length).map(p => ({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url, files: p.files.slice(0, 8) }));
   // 申告の「足りなかった決まり」（週の見直しで、決まりに足すか・一回限りかを分ける材料）
   const lacks = inSpan.flatMap(p => (parseReport(p.body)?.lack ?? []).map(t => ({ n: p.number, day: jstDay(p.merged_at), t })));
+  // 「今日」の判断の受信箱（#69）：PR の「決まりになく、自分で判断した所」
+  const owns = inSpan.flatMap(p => (parseReport(p.body)?.own ?? []).map(t => ({ n: p.number, day: jstDay(p.merged_at), t, title: p.title, url: p.url })));
   // 話題（機能ではないタグ）：Issue と PR を束ねる、軽い入り口。最初に出た日が新しいものは、見直しで扱う
   const tp = new Map<string, { name: string; feature: string | null; issues: number[]; prs: { n: number; t: string; day: string; url: string }[]; first: string; last: string }>();
   const touch = (t: string, day: string) => { const x = tp.get(t) ?? { name: t, feature: cat.topics?.find(y => y.name === t)?.feature ?? null, issues: [], prs: [], first: day, last: day }; if (day < x.first) x.first = day; if (day > x.last) x.last = day; tp.set(t, x); return x; };
@@ -409,7 +411,7 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   for (const p of prs) for (const t of prTopics.get(p.number) ?? []) touch(t, jstDay(p.merged_at)).prs.push({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url });
   const topics = [...tp.values()].sort((a, b) => b.last.localeCompare(a.last));
   const prTopicList = Object.fromEntries([...prTopics].filter(([, t]) => t.length));
-  return { repo, catalog: true as const, topics, prTopics: prTopicList, sync, today, days, features, nodes: cat.nodes, issues, unmatched, lacks, writing,
+  return { repo, catalog: true as const, topics, prTopics: prTopicList, sync, today, days, features, nodes: cat.nodes, issues, unmatched, lacks, owns, writing,
     counts: { prs: inSpan.length, building: features.filter(f => f.state === 0).length, settled: features.filter(f => f.state === 1).length, stopped: features.filter(f => f.state === 2).length,
       openIssues: issues.filter(i => i.open).length, stale: issues.filter(i => i.stale).length, unused: Object.values(cat.nodes).filter(nd => nd.note === '画面なし').length } };
 }

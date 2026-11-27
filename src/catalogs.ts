@@ -725,6 +725,23 @@ export const CATALOGS: Record<string, Catalog> = {
    ]
   },
   {
+   "id": "today-ui",
+   "group": "画面",
+   "name": "今日の画面",
+   "desc": "開いたら最初に出る、人が決めること（判断の受信箱・閉じてよさそうな Issue・気になる所・前回から変わったこと）（public/today.js・src/today.ts）",
+   "files": [
+    "^public/today\\.js$",
+    "^src/today\\.ts$"
+   ],
+   "data": [
+    "d1"
+   ],
+   "aliases": [
+    "今日の画面",
+    "今日"
+   ]
+  },
+  {
    "id": "docs-ui",
    "group": "画面",
    "name": "文書の画面",
