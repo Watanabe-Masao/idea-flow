@@ -19,7 +19,8 @@ export function fakeEnv() {
   for (const f of readdirSync('migrations').sort()) db.exec(readFileSync('migrations/' + f, 'utf8'));
   const D1 = {
     prepare: (sql: string) => new Stmt(db, sql),
-    batch: async (ss: Stmt[]) => { db.exec('BEGIN'); try { for (const s of ss) await s.run(); db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } return []; },
+    // 本物の D1 と同じく、文ごとの結果（results）を返す（SELECT なら行、ほかは空）
+    batch: async (ss: Stmt[]) => { const out: { results: unknown[]; success: boolean }[] = []; db.exec('BEGIN'); try { for (const s of ss) { const st = db.prepare(s.sql); out.push(/^\s*select/i.test(s.sql) ? { results: st.all(...(s.args as never[])), success: true } : (st.run(...(s.args as never[])), { results: [], success: true })); } db.exec('COMMIT'); } catch (e) { db.exec('ROLLBACK'); throw e; } return out; },
   };
   const DIM = 128;
   const vec = (t: string) => {

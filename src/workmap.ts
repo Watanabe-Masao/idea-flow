@@ -362,11 +362,13 @@ const addDays = (day: string, n: number) => new Date(Date.parse(day + 'T00:00:00
  */
 export async function mapView(env: Env, repo: string, span = 21, today = jstDay(nowIso())) {
   const cat = catalogOf(repo);
-  const sync = await env.DB.prepare('SELECT pr_done, issues_at, prs_at, reviewed_at, issues_more FROM map_sync WHERE repo = ?').bind(repo).first<{ pr_done: number; issues_at: string | null; prs_at: string | null; reviewed_at: string | null; issues_more: number }>();
+  // D1 への問い合わせは1回の batch にまとめる（#44：Worker と D1 が離れていると、1回ごとに往復の待ちがかかる）
+  const [sr, pr, ir] = await env.DB.batch([env.DB.prepare('SELECT pr_done, issues_at, prs_at, reviewed_at, issues_more FROM map_sync WHERE repo = ?').bind(repo), env.DB.prepare('SELECT number, title, url, merged_at, files, closes, digest, CASE WHEN digest IS NULL THEN body END AS body FROM pr_activity WHERE repo = ? ORDER BY merged_at DESC').bind(repo), env.DB.prepare('SELECT * FROM map_issues WHERE repo = ? ORDER BY open DESC, updated DESC').bind(repo)]);
+  const sync = ((sr.results as unknown[])[0] ?? null) as ({ pr_done: number; issues_at: string | null; prs_at: string | null; reviewed_at: string | null; issues_more: number }) | null;
   if (!cat) return { repo, catalog: false as const, sync };
   const days = Array.from({ length: span }, (_, k) => addDays(today, k - span + 1));
   // 説明は全文ではなく、要る行だけ（digest）を読む。digest の無い古い行だけ全文を読み、作って書き戻す（1回だけ）
-  const raw = (await env.DB.prepare('SELECT number, title, url, merged_at, files, closes, digest, CASE WHEN digest IS NULL THEN body END AS body FROM pr_activity WHERE repo = ? ORDER BY merged_at DESC').bind(repo).all<Record<string, unknown>>()).results;
+  const raw = pr.results as Record<string, unknown>[];
   const fill = raw.filter(r => r.digest == null).map(r => ({ n: Number(r.number), d: prDigest(String(r.body ?? '')) }));
   for (let k = 0; k < fill.length; k += 50) await env.DB.batch(fill.slice(k, k + 50).map(x => env.DB.prepare('UPDATE pr_activity SET digest = ? WHERE repo = ? AND number = ? AND digest IS NULL').bind(x.d, repo, x.n)));
   const dOf = new Map(fill.map(x => [x.n, x.d]));
@@ -386,7 +388,7 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   });
   const stOf = new Map(features.map(f => [f.id, f.state]));
   const old = addDays(today, -7);
-  const rows = (await env.DB.prepare('SELECT * FROM map_issues WHERE repo = ? ORDER BY open DESC, updated DESC').bind(repo).all<Issue>()).results;
+  const rows = ir.results as Issue[];
   const linked = rows.map(i => ({ i, l: linkIssue(cat, i) }));
   const links = issueLinks(repo, linked.map(({ i, l }) => ({ number: i.number, open: !!i.open, title: i.title, created: i.created, closed: i.closed, features: l.features.filter(id => !cat.features.find(f => f.id === id)?.fallback), refs: JSON.parse(i.refs || '[]'), parent: i.parent ?? null })),
     prs.map(p => ({ ...p, features: of.get(p.number)!.filter(id => !cat.features.find(f => f.id === id)?.fallback) })));
