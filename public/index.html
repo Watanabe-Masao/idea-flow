@@ -125,7 +125,7 @@ async function load(){try{$('#gate').hidden=true;await loadRules()}catch(e){say(
 // 地図（map.js）へ渡すもの
 window.IF={api,esc,say,rv:()=>RV,reload:()=>loadRules(),files:r=>pickFiles(r)};
 // 住所（#repo=…&lineage=n）で開かれたら、そのリポジトリの地図の系譜へ（#70）
-function fromHash(){const h=new URLSearchParams(location.hash.slice(1));if(h.get('repo')&&h.get('lineage')){RREPO=h.get('repo');RSUB='map';return true}return false}
+function fromHash(){const h=new URLSearchParams(location.hash.slice(1));if(h.get('repo')&&(h.get('lineage')||h.get('feature'))){RREPO=h.get('repo');RSUB='map';return true}return false}
 fromHash();window.addEventListener('hashchange',()=>{if(fromHash()&&RV)rulesView()});
 if(!TOK)$('#gate').hidden=false;else load();
 }

@@ -99,7 +99,7 @@ async function mapAction0(env: Env, action: string, a: Record<string, unknown>):
     }
     if (!f) throw new Error(`機能・話題「${q}」はありません。action="map" で確かめてください`);
     const iss = d.issues.filter(i => i.features.includes(f.id));
-    const L = [`■ ${f.name}（id=${f.id}・入口：${f.group}）：${ST[f.state]}`, f.desc,
+    const L = [`■ ${f.name}（id=${f.id}・入口：${f.group}）：${ST[f.state]}`, `機能のページ：${ORIGIN}/#repo=${encodeURIComponent(d.repo)}&feature=${encodeURIComponent(f.id)}`, f.desc,
       `使うデータ：${f.data.map(k => d.nodes[k]?.name ?? k).join('、') || 'なし'}`,
       `作業：この期間 ${f.span}件・これまで ${f.total}件・最後 ${md(f.last)}`, '', '■ 最近の作業'];
     for (const p of f.recent) {
