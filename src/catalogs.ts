@@ -878,4 +878,303 @@ export const CATALOGS: Record<string, Catalog> = {
  "issues": {},
  "words": []
 },
+  // 統計検定アプリ（#77 のプロジェクト）：講座の中身（stats2-course）とサイト・実験（knowledge-net）を1つの地図に。files の「名前:」はそのリポジトリだけ
+  'Watanabe-Masao/stats2-course': {
+ "repos": [
+  "Watanabe-Masao/stats2-course",
+  "Watanabe-Masao/knowledge-net"
+ ],
+ "features": [
+  {
+   "id": "unit",
+   "group": "講座",
+   "name": "単元の本文",
+   "desc": "単元ごとの本文（content/units/U01〜）",
+   "files": [
+    "stats2-course:^content/units/U\\d"
+   ],
+   "data": [],
+   "aliases": [
+    "単元の本文",
+    "単元",
+    "本文"
+   ]
+  },
+  {
+   "id": "labtext",
+   "group": "講座",
+   "name": "実験の解説",
+   "desc": "実験（ラボ）の解説の文（content/units/*_lab・tools/*_lab）",
+   "files": [
+    "stats2-course:^content/units/[a-z]+_lab",
+    "stats2-course:^tools/[a-z_]+_lab"
+   ],
+   "data": [],
+   "aliases": [
+    "実験の解説",
+    "ラボの解説"
+   ]
+  },
+  {
+   "id": "problem",
+   "group": "講座",
+   "name": "問題",
+   "desc": "練習問題（content/problems）",
+   "files": [
+    "stats2-course:^content/problems"
+   ],
+   "data": [],
+   "aliases": [
+    "問題"
+   ]
+  },
+  {
+   "id": "skeleton",
+   "group": "講座",
+   "name": "知識の骨格",
+   "desc": "用語・関係・主張・導出・段階（content/*.yaml）",
+   "files": [
+    "stats2-course:^content/(terms|relations|claims|derivations|powers|stages|learning|shared|apply-texts|walk-texts|experiments)\\.yaml"
+   ],
+   "data": [],
+   "aliases": [
+    "知識の骨格",
+    "用語",
+    "関係",
+    "概念のページの概要",
+    "概念のページ"
+   ]
+  },
+  {
+   "id": "formula",
+   "group": "講座",
+   "name": "数式の正しさ",
+   "desc": "数式の契約と見直し（content/formula-*・docs/formula-correctness）",
+   "files": [
+    "stats2-course:^content/formula-",
+    "stats2-course:^docs/formula-correctness"
+   ],
+   "data": [],
+   "aliases": [
+    "数式の正しさ",
+    "数式"
+   ]
+  },
+  {
+   "id": "figure",
+   "group": "講座",
+   "name": "図",
+   "desc": "図と図の元（assets/figures・tools/figure-src）",
+   "files": [
+    "stats2-course:^assets/figures",
+    "stats2-course:figure-src",
+    "stats2-course:^content/assets\\.yaml"
+   ],
+   "data": [],
+   "aliases": [
+    "図"
+   ]
+  },
+  {
+   "id": "build",
+   "group": "講座",
+   "name": "作る仕組みと公開",
+   "desc": "作る・確かめる・公開する（build/・publish/）",
+   "files": [
+    "stats2-course:^build/",
+    "stats2-course:^publish/",
+    "stats2-course:^(package(-lock)?\\.json|requirements\\.txt|templates/|tools/)"
+   ],
+   "data": [],
+   "aliases": [
+    "作る仕組み",
+    "公開",
+    "公開確認の記録",
+    "公開確認"
+   ]
+  },
+  {
+   "id": "migration",
+   "group": "講座",
+   "name": "移行（旧 Notion）",
+   "desc": "旧 Notion からの移行（migration/）",
+   "files": [
+    "stats2-course:^migration/"
+   ],
+   "data": [],
+   "aliases": [
+    "移行"
+   ],
+   "fallback": true
+  },
+  {
+   "id": "engine",
+   "group": "サイト",
+   "name": "実験の仕組み",
+   "desc": "実験の計算（math-lab/packages/engine）",
+   "files": [
+    "knowledge-net:^math-lab/packages/engine",
+    "knowledge-net:^math-lab/(?!packages/ui)"
+   ],
+   "data": [],
+   "aliases": [
+    "実験の仕組み",
+    "エンジン"
+   ]
+  },
+  {
+   "id": "labui",
+   "group": "サイト",
+   "name": "実験の部品",
+   "desc": "実験の画面の部品（math-lab/packages/ui）",
+   "files": [
+    "knowledge-net:^math-lab/packages/ui"
+   ],
+   "data": [],
+   "aliases": [
+    "実験の部品",
+    "作業台"
+   ]
+  },
+  {
+   "id": "relmap",
+   "group": "サイト",
+   "name": "関係図",
+   "desc": "概念のつながりの図（src/RelationMap・Relation・relationMap）",
+   "files": [
+    "knowledge-net:^src/(RelationMap|RelMap|Relation|relationMap)",
+    "knowledge-net:^scripts/measure-relmap"
+   ],
+   "data": [],
+   "aliases": [
+    "関係図",
+    "関係の段",
+    "路線図"
+   ]
+  },
+  {
+   "id": "glance",
+   "group": "サイト",
+   "name": "語のひと目と一覧",
+   "desc": "語のひと目・一覧・分類・探す（src/Glance・Library・CategoryList・Search）",
+   "files": [
+    "knowledge-net:^src/(Glance|Library|CategoryList|Search|Claims|Conditions|Detail)"
+   ],
+   "data": [],
+   "aliases": [
+    "語のひと目",
+    "一覧",
+    "図書館"
+   ]
+  },
+  {
+   "id": "unitpage",
+   "group": "サイト",
+   "name": "単元のページ",
+   "desc": "単元のページと道すじ（src/UnitPage・Route・PathList）",
+   "files": [
+    "knowledge-net:^src/(UnitPage|Route|PathList)"
+   ],
+   "data": [],
+   "aliases": [
+    "単元のページ",
+    "道すじ"
+   ]
+  },
+  {
+   "id": "icons",
+   "group": "サイト",
+   "name": "概念のアイコン",
+   "desc": "概念ごとのアイコン（src/conceptIcons・icons）",
+   "files": [
+    "knowledge-net:^src/(conceptIcons|icons)"
+   ],
+   "data": [],
+   "aliases": [
+    "概念のアイコン",
+    "アイコン"
+   ]
+  },
+  {
+   "id": "schema",
+   "group": "サイト",
+   "name": "データの形",
+   "desc": "スキーマと生成（schema/・scripts/gen.mjs・src/data.ts）",
+   "files": [
+    "knowledge-net:^schema/",
+    "knowledge-net:^scripts/gen\\.mjs",
+    "knowledge-net:^src/data\\.ts"
+   ],
+   "data": [],
+   "aliases": [
+    "データの形",
+    "スキーマ"
+   ]
+  },
+  {
+   "id": "site",
+   "group": "サイト",
+   "name": "サイトの土台",
+   "desc": "画面の枠・URL・見本（src/App・Shell・Panel・urlState・main）",
+   "files": [
+    "knowledge-net:^src/(App|Shell|Panel|urlState|main|kinds|screen-kinds|Redraw)",
+    "knowledge-net:^public/",
+    "knowledge-net:^(index\\.html|vite\\.config|package\\.json)",
+    "knowledge-net:^(scripts/(check-design|sync-sample)|tsconfig|\\.prettier|sample\\.lock|package-lock|\\.git-blame)"
+   ],
+   "data": [],
+   "aliases": [
+    "サイトの土台",
+    "見本",
+    "決定"
+   ]
+  },
+  {
+   "id": "rules",
+   "group": "裏方",
+   "name": "決まりと文書",
+   "desc": "決まり・計画・決定の記録（docs/・CLAUDE.md）",
+   "files": [
+    "^docs/",
+    "(^|/)CLAUDE\\.md$",
+    "^README",
+    "stats2-course:^content/guide\\.md"
+   ],
+   "data": [],
+   "aliases": [
+    "決まりと文書",
+    "決まり",
+    "設計書",
+    "計画書",
+    "決定の記録",
+    "準備の文書"
+   ],
+   "fallback": true
+  },
+  {
+   "id": "ci",
+   "group": "裏方",
+   "name": "テスト・CI",
+   "desc": "テストと CI（tests/・.github）",
+   "files": [
+    "^tests?/",
+    "^\\.github/",
+    "\\.test\\.",
+    "^playwright"
+   ],
+   "data": [],
+   "aliases": [
+    "テスト・CI",
+    "テスト",
+    "画面のテスト",
+    "CI",
+    "test-plan"
+   ],
+   "fallback": true
+  }
+ ],
+ "nodes": {},
+ "issues": {},
+ "words": []
+},
 };
