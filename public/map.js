@@ -74,7 +74,7 @@ async function sync(r) {
 function iline(d, i) {
   const fn = id => { const f = d.features.find(x => x.id === id); return f ? `${f.name}（${ST[f.state]}）` : id; };
   const where = i.features.map(fn).join('、') || (i.nodes.length ? 'なし（画面のないデータ）' : 'どの機能にも当たらない');
-  return `<div class="wm-iss"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener">#${i.number} ${esc(i.title)}</a>${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}
+  return `<div class="wm-iss"><a href="${i.url || GH(REPO) + '/issues/' + i.number}" target="_blank" rel="noopener">#${i.number} ${esc(i.title)}</a>${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}
   <div class="m">${i.open ? '最後に動いた ' + md(i.updated) : '閉じた ' + md(i.closed)}　機能：${esc(where)}${i.nodes.length ? '　データ：' + esc(i.nodes.map(k => d.nodes[k]?.name || k).join('、')) : ''}${i.how ? '　（' + esc(i.how) + '）' : ''}</div></div>`;
 }
 // 書き方の守り具合（CLAUDE.md の「書き方」）。足りないものの一覧は開いたときだけ
@@ -136,7 +136,7 @@ function issueView(d, s) {
     const prs = [...byDay].map(([day, ls]) => { const c = ls.some(l => l.kind === 'closes'), k = ls.every(l => l.kind === 'candidate');
       return `<i class="pr${c ? ' c' : ''}${k ? ' k' : ''}" style="left:${x(day)}" title="${esc(md(day))} ${ls.map(l => '#' + l.n).join(' ')}">${ls.length > 1 ? `<b>${ls.length}</b>` : ''}</i>`; }).join('');
     const KIND = KNAME;
-    const det = on ? `<div class="wm-det"><a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">#${i.number} ${esc(i.title)}</a>
+    const det = on ? `<div class="wm-det"><a href="${i.url || GH(REPO) + '/issues/' + i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">#${i.number} ${esc(i.title)}</a>
       <div style="margin-top:4px">立てた ${md(i.created)}${i.closed ? `・閉じた ${md(i.closed)}（${dnum(i.closed) - dnum(i.created)}日）` : `・開いたまま ${today - dnum(i.created)}日・最後に動いた ${md(i.updated)}`}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>
       <div>機能：${esc(i.features.map(fname).join('、') || (i.nodes.length ? 'なし（画面のないデータ）' : 'どの機能にも当たらない'))}${i.how ? `（${esc(i.how)}）` : ''}</div>
       <div class="row" style="margin-top:6px"><button class="btn" data-ifocus="${s.ifocus === i.number ? '' : i.number}" style="min-height:36px">${s.ifocus === i.number ? '中心をやめる' : 'この Issue を中心に'}</button></div>
@@ -237,8 +237,8 @@ function clusterView(d, s) {
   // 選んだものの中身（根拠）
   let det = '<p class="sub" style="margin-top:8px">四角を押すと、つながりの根拠が出ます。</p>';
   // スマホでは、題はすぐ上の行に出ているので繰り返さない
-  const issueDet = i => `<div class="wm-det" style="${phone ? 'margin-top:0' : 'border-top:1px solid var(--ink);border-radius:10px;margin-top:8px'}">${phone ? '' : `<a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">Issue #${i.number} ${esc(i.title)}</a>`}<div>立てた ${md(i.created)}${i.closed ? '・閉じた ' + md(i.closed) : '・開いている'}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>
-    <div class="row" style="margin-top:6px"><button class="btn" data-totl="${i.number}" style="min-height:36px">Issue の経過で見る</button>${phone ? `<a href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener" style="align-self:center;font-size:13px">GitHub で開く</a>` : ''}</div>${linkHead(i, s)}${linkList(i, s)}</div>`;
+  const issueDet = i => `<div class="wm-det" style="${phone ? 'margin-top:0' : 'border-top:1px solid var(--ink);border-radius:10px;margin-top:8px'}">${phone ? '' : `<a href="${i.url || GH(REPO) + '/issues/' + i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">Issue #${i.number} ${esc(i.title)}</a>`}<div>立てた ${md(i.created)}${i.closed ? '・閉じた ' + md(i.closed) : '・開いている'}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>
+    <div class="row" style="margin-top:6px"><button class="btn" data-totl="${i.number}" style="min-height:36px">Issue の経過で見る</button>${phone ? `<a href="${i.url || GH(REPO) + '/issues/' + i.number}" target="_blank" rel="noopener" style="align-self:center;font-size:13px">GitHub で開く</a>` : ''}</div>${linkHead(i, s)}${linkList(i, s)}</div>`;
   if (sel && sel.startsWith('i')) { const i = d.issues.find(x => x.number === +sel.slice(1)); if (i) det = issueDet(i); }
   if (sel && sel.startsWith('p')) { const p = prs.find(x => 'p' + x.n === sel); if (p) det = `<div class="wm-det" style="border-top:1px solid var(--ink);border-radius:10px;margin-top:8px"><a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">PR #${p.n} ${esc(p.title)}</a><div>マージ ${md(p.day)}</div>${p.edges.map(e => `<div class="wm-link"><span class="wm-kind${e.kind === 'candidate' ? ' k' : ''}">${LKOF(e.kind)[0]}</span>Issue #${e.i}${e.ev.map(x => `<div class="ev">根拠：${esc(x)}</div>`).join('')}</div>`).join('')}</div>`; }
   s._sheet = null;
@@ -260,7 +260,7 @@ function clusterView(d, s) {
       const iss = num ? d.issues.filter(i => i.number === num) : d.issues.filter(i => i.title.includes(q)).slice(0, 8);
       const cls = num ? [] : per.filter(x => x.f.name.includes(q));
       hits = [...cls.map(x => `<button class="btn" data-cl="${esc(x.f.id)}">${esc(x.f.name.replace(/（.*）/, ''))}<br><small class="sub">${esc(cnt(x))}</small></button>`),
-        ...iss.map(i => { const h = home(i.number); return h ? `<button class="btn" data-jump="${esc(h.f.id)}|${i.number}">Issue #${i.number} ${esc(i.title)}<br><small class="sub">${esc(h.f.name.replace(/（.*）/, ''))} で開く</small></button>` : `<a class="btn" style="display:block;margin-top:6px" href="${GH(REPO)}/issues/${i.number}" target="_blank" rel="noopener">Issue #${i.number} ${esc(i.title)}（どの入り口にもない・GitHub で開く）</a>`; })].join('') || '<p class="sub">見つかりません</p>';
+        ...iss.map(i => { const h = home(i.number); return h ? `<button class="btn" data-jump="${esc(h.f.id)}|${i.number}">Issue #${i.number} ${esc(i.title)}<br><small class="sub">${esc(h.f.name.replace(/（.*）/, ''))} で開く</small></button>` : `<a class="btn" style="display:block;margin-top:6px" href="${i.url || GH(REPO) + '/issues/' + i.number}" target="_blank" rel="noopener">Issue #${i.number} ${esc(i.title)}（どの入り口にもない・GitHub で開く）</a>`; })].join('') || '<p class="sub">見つかりません</p>';
     }
     const group = (title, xs) => xs.length ? `<h4>${title}</h4>${xs.map(x => `<button class="btn" data-cl="${esc(x.f.id)}" aria-pressed="${x.f.id === s.cl}">${esc(x.f.name.replace(/（.*）/, ''))}<br><small class="sub">${esc(cnt(x))}</small></button>`).join('')}` : '';
     return `<div class="wm-pick" style="display:block"><div class="row" style="margin-top:0;flex-wrap:nowrap"><input id="wmq" class="wm-q" type="search" placeholder="#411 や言葉で探す" value="${esc(q)}" enterkeyhint="search"><button class="btn" data-qgo="1" style="flex:none">探す</button><button class="btn" data-pick="0" style="flex:none">閉じる</button></div>
@@ -278,6 +278,8 @@ function clusterView(d, s) {
   }
 }
 
+// プロジェクト（#77）：番号（100万以上）を「名前#番号」に戻して出す。数としての番号（data-…）はそのまま
+const relabelHtml = (h, names) => names && names.length > 1 ? h.replace(/#(\d{7,})\b/g, (_m, n) => `${names[Math.floor(n / 1e6) - 1] || '?'}#${n % 1e6}`) : h;
 function draw() {
   if (!EL) return;
   const s = st(REPO), d = s.data;
@@ -285,11 +287,11 @@ function draw() {
     ${s.view === 'feat' ? `<div class="seg" role="group" aria-label="期間">${[[21, '3週間'], [60, '2か月']].map(([v, l]) => `<button data-span="${v}" aria-pressed="${s.span === v}">${l}</button>`).join('')}</div>` : ''}</div>
     <div class="seg" role="group" aria-label="見かた" style="margin:8px 0 0;margin-left:0">${[['feat', '機能'], ['cluster', (EL.clientWidth || 400) < 640 ? '関連する作業' : 'クラスター'], ['issue', 'Issue の経過']].map(([v, l]) => `<button data-view="${v}" aria-pressed="${s.view === v}">${l}</button>`).join('')}</div>
     ${s.note ? `<p class="sub" style="margin-top:6px">${esc(s.note)}</p>` : ''}`;
-  if (!d) { EL.innerHTML = `<div class="wm">${top}<p class="sub" style="margin-top:8px">読み込み中…</p></div>`; return; }
-  if (!d.catalog) { EL.innerHTML = `<div class="wm">${top}<p class="sub" style="margin-top:8px">このリポジトリには、まだ機能の一覧（カタログ）がありません。<code>src/catalogs.ts</code> に足すと、地図が作られます。</p></div>`; return; }
-  if (s.view === 'cluster') { EL.innerHTML = `<div class="wm">${top}${clusterView(d, s)}</div>`; sheet(s._sheet); return; }
+  if (!d) { EL.innerHTML = relabelHtml(`<div class="wm">${top}<p class="sub" style="margin-top:8px">読み込み中…</p></div>`, d && d.names); return; }
+  if (!d.catalog) { EL.innerHTML = relabelHtml(`<div class="wm">${top}<p class="sub" style="margin-top:8px">このリポジトリには、まだ機能の一覧（カタログ）がありません。<code>src/catalogs.ts</code> に足すと、地図が作られます。</p></div>`, d && d.names); return; }
+  if (s.view === 'cluster') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${clusterView(d, s)}</div>`, d && d.names); sheet(s._sheet); return; }
   sheet(null);
-  if (s.view === 'issue') { EL.innerHTML = `<div class="wm">${top}${issueView(d, s)}</div>`; return; }
+  if (s.view === 'issue') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${issueView(d, s)}</div>`, d && d.names); return; }
   const c = d.counts, n = d.days.length, step = n > 30 ? 14 : 7;
   let rows = '', g = '';
   for (const f of d.features) {
@@ -301,7 +303,7 @@ function draw() {
   }
   const open = d.issues.filter(i => i.open), closed = d.issues.filter(i => !i.open);
   const nodeNote = s.node ? `<div class="card" style="margin-top:8px"><b>${esc(d.nodes[s.node].name)}</b><div class="sub">${esc(d.nodes[s.node].note)}。使っている機能：${esc(d.features.filter(f => f.data.includes(s.node)).map(f => f.name).join('、') || 'なし')}</div>${d.issues.filter(i => i.nodes.includes(s.node)).map(i => iline(d, i)).join('')}</div>` : '';
-  EL.innerHTML = `<div class="wm">${top}
+  EL.innerHTML = relabelHtml(`<div class="wm">${top}
   <p class="sub" style="margin-top:8px">機能の一覧と、マージした PR（変えたファイル）・Issue から自動で作ります。読むだけで、リポジトリには書きません。今日（${md(d.today)}）までの${n}日。</p>
   <div class="wm-sum"><div class="hot"><b>${c.stopped}</b><span>直近7日マージなしの機能</span></div><div><b>${c.building}／${c.settled}</b><span>直近4日に3件以上マージ／直近7日にマージあり</span></div>
   <div><b>${c.openIssues}</b><span>開いている Issue（うち古い候補 ${c.stale}）</span></div><div><b style="color:var(--red2)">${c.unused}</b><span>貯めているが画面なし</span></div></div>
@@ -319,7 +321,7 @@ function draw() {
   ${d.unmatched.length ? `<ul style="font-size:14px;padding-left:1.2em">${d.unmatched.slice(0, 30).map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.n}</a> ${md(p.day)} ${esc(p.t)}</li>`).join('')}</ul>` : '<p class="sub">なし</p>'}
   <h3>データの流れ</h3><p class="sub">左はデータ、右は機能。赤い破線は、貯めているのにどの画面も使っていないデータ。押すと、つながる先が光ります。</p>
   ${nodeNote}<div class="fig" style="margin-top:8px">${flow(d, s)}</div>
-  <p class="sub" style="margin-top:8px">取り込み：Issue ${d.issues.length}件${d.sync?.issues_more ? '（1000件で止めた。続きあり）' : '（すべて）'}・PR ${d.sync?.pr_done ? 'すべて' : '途中まで'}・最後に読んだ ${d.sync?.prs_at ? md(d.sync.prs_at.slice(0, 10)) + ' ' + d.sync.prs_at.slice(11, 16) + '（UTC）' : 'まだ'}</p></div>`;
+  <p class="sub" style="margin-top:8px">取り込み：Issue ${d.issues.length}件${d.sync?.issues_more ? '（1000件で止めた。続きあり）' : '（すべて）'}・PR ${d.sync?.pr_done ? 'すべて' : '途中まで'}・最後に読んだ ${d.sync?.prs_at ? md(d.sync.prs_at.slice(0, 10)) + ' ' + d.sync.prs_at.slice(11, 16) + '（UTC）' : 'まだ'}</p></div>`, d && d.names);
 }
 
 // スマホでは、選んだものの根拠を画面の下から出す（下までスクロールしなくてよい）

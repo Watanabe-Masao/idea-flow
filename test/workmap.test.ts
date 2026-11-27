@@ -289,3 +289,42 @@ test('今日：前回から変わったことの題は、その機能でいち�
   assert.equal(c.n, 2);
   assert.equal(c.last, '満月の物語：作業2'); // 1時間前の方が新しい
 });
+
+test('プロジェクト（#77）：2つのリポジトリを1つの地図に束ね、同じ番号を見分け、リポジトリをまたぐ「の続き」をつなぐ', async () => {
+  const { qText, labelOf, featuresOfFiles } = await import('../src/workmap.ts');
+  const M = ['o/course', 'o/net'];
+  // 本文の番号の書き換え
+  assert.equal(qText('#3 と net#5 と o/course#7、https://github.com/o/net/issues/9', 1, M), '#2000003 と #2000005 と #1000007、#2000009');
+  assert.equal(labelOf(['course', 'net'], 2000005), 'net#5');
+  assert.equal(labelOf(['course', 'net'], 1000005), 'course#5');
+  CATALOGS['o/course'] = { repos: M, features: [
+    { id: 'text', group: 'g', name: '講座の中身', desc: '', files: ['course:^content/'], data: [], aliases: ['講座'] },
+    { id: 'lab', group: 'g', name: '実験', desc: '', files: ['net:^src/lab'], data: [], aliases: ['実験'] },
+  ], nodes: {}, issues: {}, words: [] } as any;
+  try {
+    const cat = CATALOGS['o/course'];
+    assert.deepEqual(featuresOfFiles(cat, ['course:content/a.md']), ['text']);
+    assert.deepEqual(featuresOfFiles(cat, ['net:content/a.md']), []);        // 名前つきの決まりは、そのリポジトリだけ
+    const env = fakeEnv() as any, now = Date.now(), d = (h: number) => new Date(now - h * 3600e3).toISOString();
+    for (const r of M) await env.DB.prepare("INSERT INTO map_sync (repo, pr_done, prs_at, issues_at) VALUES (?, 1, ?, ?)").bind(r, d(0), d(0)).run();
+    const pr = (r: string, n: number, title: string, files: string[], body: string) => env.DB.prepare('INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)')
+      .bind(r, n, title, `https://github.com/${r}/pull/${n}`, d(2), body, JSON.stringify(files), d(0), '[]').run();
+    const iss = (r: string, n: number, title: string, body: string) => env.DB.prepare('INSERT INTO map_issues (repo, number, open, title, body, created, updated, closed, refs) VALUES (?, ?, 1, ?, ?, ?, ?, NULL, ?)')
+      .bind(r, n, title, body, d(48), d(1), '[]').run();
+    await pr('o/course', 1, '講座：二項分布の本文', ['content/binom.md'], '関連 #3');
+    await pr('o/net', 1, '実験：二項分布の実験', ['src/lab/binom.ts'], '関連 #3');
+    await iss('o/course', 3, '講座：二項分布', '機能：講座の中身\n閉じる条件：本文がそろう');
+    await iss('o/net', 3, '実験：二項分布', '機能：実験\n閉じる条件：実験が動く\ncourse#3 の続き');
+    const v = await mapView(env, 'o/course', 21) as any;
+    assert.deepEqual(v.names, ['course', 'net']);
+    const a = v.issues.find((i: any) => i.number === 1000003), b = v.issues.find((i: any) => i.number === 2000003);
+    assert.ok(a && b, '同じ #3 でも別の Issue');
+    assert.equal(b.url, 'https://github.com/o/net/issues/3');
+    assert.deepEqual(a.links.filter((l: any) => l.type === 'pr').map((l: any) => l.n), [1000001]);    // 講座の #3 には講座の PR #1 だけ
+    assert.deepEqual(b.links.filter((l: any) => l.type === 'pr').map((l: any) => l.n), [2000001]);    // 実験の #3 には実験の PR #1 だけ
+    const h = b.links.find((l: any) => l.type === 'issue' && l.n === 1000003);
+    assert.equal(h?.kind, 'from');                                                                      // リポジトリをまたぐ引き継ぎ
+    assert.match(h.evidence.join(' '), /course#3 の続き/);                                              // 文の中は「名前#番号」に戻る
+    assert.deepEqual(v.features.find((f: any) => f.id === 'lab').total, 1);
+  } finally { delete CATALOGS['o/course']; }
+});
