@@ -45,13 +45,14 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
     pr(2, '2026-11-24T03:00:00Z', ['src/ui/MoonStory.tsx']), pr(3, '2026-11-25T03:00:00Z', ['src/ui/MoonStory.tsx']), pr(4, '2026-11-26T15:30:00Z', ['src/ui/MoonStory.tsx']),
     pr(5, '2026-11-22T03:00:00Z', ['src/ui/AirCard.tsx']), pr(6, '2026-11-26T03:00:00Z', ['README.md']),
   ];
-  let gql = 0;
+  let gql = 0; const sinces: (string | null)[] = [];
   const real = globalThis.fetch;
   globalThis.fetch = (async (u: string | URL, init?: RequestInit) => {
     const url = new URL(String(u));
     if (url.pathname === '/graphql') {
       gql++;
       const q = JSON.parse(String(init!.body)), v = q.variables;
+      if (q.query.includes('issues(')) sinces.push(v.since ?? null);
       if (q.query.includes('issues(')) return Response.json({ data: { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [
         { number: 7, state: 'OPEN', title: 'データの土台', body: '', createdAt: '2026-11-21T00:00:00Z', updatedAt: '2026-11-21T00:00:00Z', closedAt: null, parent: null },
         { number: 8, state: 'OPEN', title: 'βモデル 段階4', body: '', createdAt: '2026-11-11T00:00:00Z', updatedAt: '2026-11-15T00:00:00Z', closedAt: null, parent: null },
@@ -71,6 +72,13 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
     assert.deepEqual([u.updated, u.issues, u.caughtUp], [2, 3, true]);
     assert.equal(gql, 4); // さかのぼり1・さかのぼり1（残り2件）・最近の更新1・Issue 1
     assert.equal(a.calls + b.calls + u.calls, 4); // 計測（#44）の回数が、実際の問い合わせと合う
+    assert.equal(u.issuesFull, true);                                   // 初めては Issue を全部
+    const u2 = await syncMap(env, 'o/r', { mode: 'update' });
+    assert.equal(u2.issuesFull, false);                                 // 2回目からは、前回のあとに動いた Issue だけ（#44）
+    assert.equal(sinces[0], null);
+    assert.ok(sinces[1] && Date.parse(sinces[1]) < Date.now());        // 前回の読み始めより少し前から
+    await env.DB.prepare("UPDATE map_sync SET issues_full_at = '2000-01-01T00:00:00Z' WHERE repo = 'o/r'").run();
+    assert.equal((await syncMap(env, 'o/r', { mode: 'update' })).issuesFull, true); // 1日たったら全部読み直す
   } finally { globalThis.fetch = real; }
 
   const v = await mapView(env, 'o/r', 21, '2026-11-27') as any;
