@@ -276,3 +276,16 @@ test('地図：行をまたぐタグと「関連：なし」が、新しく取�
     assert.ok(!m2 || !m2.miss.includes('関係する Issue の番号'), `${old ? '書き戻し' : '新しく取り込み'}：関連：なし`);
   }
 });
+
+test('今日：前回から変わったことの題は、その機能でいちばん新しくマージした PR（#69 の続き）', async () => {
+  const { todayView } = await import('../src/today.ts');
+  const { prDigest } = await import('../src/workmap.ts');
+  const R = 'Watanabe-Masao/weather-note-cf', env = fakeEnv() as any, now = Date.now();
+  await env.DB.prepare("INSERT INTO map_sync (repo, pr_done, prs_at) VALUES (?, 1, ?)").bind(R, new Date(now).toISOString()).run();
+  for (const [n, h] of [[1, 5], [2, 1]]) await env.DB.prepare('INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(R, n, `満月の物語：作業${n}`, 'u', new Date(now - h * 3600e3).toISOString(), '', '["src/MoonStory.tsx"]', new Date(now).toISOString(), '[]', prDigest('')).run();
+  const v = await todayView(env, R) as any;
+  const c = v.changes.find((x: any) => x.id === 'story');
+  assert.equal(c.n, 2);
+  assert.equal(c.last, '満月の物語：作業2'); // 1時間前の方が新しい
+});
