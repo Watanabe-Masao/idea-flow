@@ -46,7 +46,8 @@ export async function todayView(env: Env, repo: string) {
   for (const c of conf.results as { key: string; a: string; b: string | null; pa: string; pb: string | null }[]) items.push({ key: `conflict:${c.key}`, kind: 'conflict', title: `${c.a}${c.b ? ` ⇔ ${c.b}` : ''}`, sub: `文書の食い違いの候補（${c.pa}${c.pb && c.pb !== c.pa ? `・${c.pb}` : ''}）` });
   for (const t of v.topics.filter(t => !t.feature && t.first >= since)) items.push({ key: `topic:${t.name}`, kind: 'topic', title: t.name, sub: `新しい話題（Issue ${t.issues.length}件・PR ${t.prs.length}件）。機能に上げるか・別名にまとめるか・話題のままか` });
   // 前回から変わったこと：機能ごとに1行
-  const changes = v.features.map(f => { const xs = f.byDay.flatMap((b, k) => v.days[k] >= since ? b : []); return xs.length ? { id: f.id, name: f.name, n: xs.length, last: xs.at(-1)!.t } : null; }).filter(Boolean);
+  // いちばん新しい題：日は新しい方から、同じ日の中はマージの新しい順（byDay は新しい順に並んでいる）
+  const changes = v.features.map(f => { const ks = v.days.map((d, k) => k).filter(k => v.days[k] >= since && f.byDay[k].length); const n = ks.reduce((a, k) => a + f.byDay[k].length, 0); return n ? { id: f.id, name: f.name, n, last: f.byDay[ks.at(-1)!][0].t } : null; }).filter(Boolean);
   return { repo, catalog: true as const, since, items: items.filter(x => !done.has(x.key)), changes, decided: done.size };
 }
 
