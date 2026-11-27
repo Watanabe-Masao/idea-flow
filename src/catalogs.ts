@@ -783,7 +783,8 @@ export const CATALOGS: Record<string, Catalog> = {
    "name": "コネクタ（MCP）",
    "desc": "Claude が地図と文書を読む入口（idea_flow の action）",
    "files": [
-    "^src/mcp"
+    "^src/mcp",
+    "^src/selfcheck\\.ts$"
    ],
    "data": [
     "d1"
