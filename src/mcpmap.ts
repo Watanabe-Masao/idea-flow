@@ -4,7 +4,7 @@ import { CATALOGS } from './catalogs.ts';
 import { catalogOf, mapView, syncMap } from './workmap.ts';
 import { selfCheck, WRITING_RULES } from './selfcheck.ts';
 
-type MapData = Extract<Awaited<ReturnType<typeof mapView>>, { catalog: true }>;
+type MapData = Extract<Awaited<ReturnType<typeof mapView>>, { catalog: true }> & { took: number };
 const ST = ['直近4日に3件以上マージ', '直近7日にマージあり', '直近7日マージなし'];
 const KIND: Record<string, string> = { parent: '親子（親）', child: '親子（子）', from: '引き継ぎ元（本文から）', to: '引き継ぎ先（本文から）', closes: 'これで閉じた', ref: '番号で参照', candidate: '推測（候補・確定ではない）' };
 const md = (d: string | null) => (d ? d.slice(5).replace('-', '/') : 'なし');
@@ -21,13 +21,13 @@ function repoOf(a: Record<string, unknown>) {
 /** 地図を読む。最後に GitHub から読んでから30分たっていれば、先に少し読み直す（失敗しても手元の分で答える） */
 async function load(env: Env, a: Record<string, unknown>, span = 21): Promise<MapData> {
   const repo = repoOf(a);
-  let v = await mapView(env, repo, span);
+  let t0 = Date.now(), v = await mapView(env, repo, span), took = Date.now() - t0;
   if (!v.catalog) throw new Error(`${repo} には機能の一覧（カタログ）がありません`);
   const at = v.sync?.prs_at ? Date.parse(v.sync.prs_at) : 0;
   if (a.refresh || Date.now() - at > 30 * 60 * 1000) {
-    try { const u = await syncMap(env, repo, { mode: 'update' }); if (!u.busy && !u.backfillDone) await syncMap(env, repo, { mode: 'backfill', pages: 2 }); v = await mapView(env, repo, span); } catch { /* 手元の分で答える */ }
+    try { const u = await syncMap(env, repo, { mode: 'update' }); if (!u.busy && !u.backfillDone) await syncMap(env, repo, { mode: 'backfill', pages: 2 }); t0 = Date.now(); v = await mapView(env, repo, span); took = Date.now() - t0; } catch { /* 手元の分で答える */ }
   }
-  return v as MapData;
+  return { ...v, took } as MapData; // took：地図の計算にかかった時間（#44 の計測）
 }
 
 const fname = (d: MapData, id: string) => d.features.find(f => f.id === id)?.name ?? id;
@@ -74,6 +74,7 @@ export async function mapAction(env: Env, action: string, a: Record<string, unkn
     if (stale.length) L.push('', '■ 古くなっている候補（つながる機能がすべて直近7日マージなしで、7日以上動いていない）', ...stale.map(i => '- ' + issueLine(d, i)));
     if (d.topics.length) L.push('', `■ 話題（タグ）${d.topics.length}：${d.topics.slice(0, 15).map(t => `${t.name}（${t.issues.length + t.prs.length}）`).join('、')}`);
     if (d.unmatched.length) L.push('', `■ どの機能にも当たらない作業（カタログに機能を足すかの材料）`, ...d.unmatched.slice(0, 10).map(p => `- #${p.n} ${md(p.day)} ${p.t}`));
+    L.push('', `計測：地図の計算 ${d.took}ms・大きさ ${Math.round(JSON.stringify(d).length / 1024)}KB（画面が受け取るものと同じ）`);
     L.push('', '機能の中身は action="feature"（args: id）、Issue の周辺は action="issue"（args: n）。');
     return L.join('\n');
   }
