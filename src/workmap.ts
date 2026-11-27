@@ -105,7 +105,7 @@ async function graphql<T>(env: Env, query: string, variables: Record<string, unk
 const PR_Q = `query($o:String!,$n:String!,$after:String,$dir:OrderDirection!,$field:IssueOrderField!){repository(owner:$o,name:$n){pullRequests(states:MERGED,first:50,after:$after,orderBy:{field:$field,direction:$dir}){pageInfo{hasNextPage endCursor} nodes{number title url mergedAt updatedAt body files(first:100){nodes{path}} closingIssuesReferences(first:10){nodes{number}}}}}}`;
 type PrPage = { repository: { pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { number: number; title: string; url: string; mergedAt: string; updatedAt?: string; body: string; files: { nodes: { path: string }[] } | null; closingIssuesReferences?: { nodes: { number: number }[] } | null }[] } } };
 
-type SyncRow = { pr_cursor: string | null; pr_done: number; prs_at: string | null; issues_at: string | null; sync_id: string | null; sync_until: string | null; upd_cursor: string | null; upd_boundary: string | null; upd_started: string | null };
+type SyncRow = { pr_cursor: string | null; pr_done: number; prs_at: string | null; issues_at: string | null; issues_more?: number; issues_full_at?: string | null; sync_id: string | null; sync_until: string | null; upd_cursor: string | null; upd_boundary: string | null; upd_started: string | null };
 
 /**
  * 取り込み。2つを分けて行う（画面もコネクタも同じ関数を呼ぶ）。
@@ -124,14 +124,14 @@ export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | '
   await env.DB.prepare('INSERT OR IGNORE INTO map_sync (repo, pr_done) VALUES (?, 0)').bind(repo).run();
   await env.DB.prepare('UPDATE map_sync SET sync_id = ?, sync_until = ? WHERE repo = ? AND (sync_id IS NULL OR sync_until < ?)').bind(id, until, repo, now).run();
   const st = await env.DB.prepare('SELECT * FROM map_sync WHERE repo = ?').bind(repo).first<SyncRow>();
-  if (st?.sync_id !== id) return { mode, busy: true, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st?.pr_done, caughtUp: false, issuesMore: false, calls: 0, ms: Date.now() - t0 };
+  if (st?.sync_id !== id) return { mode, busy: true, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st?.pr_done, caughtUp: false, issuesMore: false, issuesFull: false, calls: 0, ms: Date.now() - t0 };
   const mine = 'EXISTS (SELECT 1 FROM map_sync WHERE repo = ? AND sync_id = ?)';
   const save = (nodes: PrPage['repository']['pullRequests']['nodes']) => nodes.map(p => env.DB.prepare(
     `INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${mine}
      ON CONFLICT(repo, number) DO UPDATE SET title = excluded.title, body = excluded.body, files = excluded.files, fetched_at = excluded.fetched_at, closes = excluded.closes`)
     .bind(repo, p.number, p.title, p.url, p.mergedAt, p.body ?? '', JSON.stringify((p.files?.nodes ?? []).map(f => f.path)), now, JSON.stringify((p.closingIssuesReferences?.nodes ?? []).map(x => x.number)), repo, id));
   const stmts: D1PreparedStatement[] = [];
-  const res = { mode, busy: false, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st.pr_done, caughtUp: false, issuesMore: false, calls: 0, ms: 0 };
+  const res = { mode, busy: false, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st.pr_done, caughtUp: false, issuesMore: false, issuesFull: false, calls: 0, ms: 0 };
   try {
     if (mode === 'backfill') {
       let cursor = st.pr_cursor, done = !!st.pr_done;
@@ -158,12 +158,18 @@ export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | '
         ? env.DB.prepare('UPDATE map_sync SET prs_at = ?, upd_cursor = NULL, upd_boundary = NULL, upd_started = NULL WHERE repo = ? AND sync_id = ?').bind(started, repo, id)
         : env.DB.prepare('UPDATE map_sync SET upd_cursor = ?, upd_boundary = ?, upd_started = ? WHERE repo = ? AND sync_id = ?').bind(after, boundary, started, repo, id));
       // Issue だけを（PR を混ぜずに）100件ずつ、10ページまで。GitHub の親子（サブ Issue）の親も読む
-      const issues = await readIssues(env, o, n);
+      // ふだんは前回の読み始めより後に動いた Issue だけ（#44：更新0件でも全部読み直すのが重さの大半だった）。
+      // 前回が途中（1000件で止めた）か、全部読み直してから1日たったら、全部（消えた・移った Issue に気づくため）
+      const full = !st.issues_at || !!st.issues_more || !st.issues_full_at || Date.parse(now) - Date.parse(st.issues_full_at) > 864e5;
+      const since = full ? null : new Date(Date.parse(st.issues_at!) - 5 * 60e3).toISOString(); // 時計のずれに5分の余裕
+      const issues = await readIssues(env, o, n, since);
       for (const i of issues.list)
         stmts.push(env.DB.prepare(`INSERT OR REPLACE INTO map_issues (repo, number, open, title, body, created, updated, closed, refs, parent) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${mine}`)
           .bind(repo, i.number, i.state === 'OPEN' ? 1 : 0, i.title, (i.body ?? '').slice(0, 4000), i.createdAt, i.updatedAt, i.closedAt, JSON.stringify(refLines(i.body ?? '')), i.parent?.number ?? null, repo, id));
-      stmts.push(env.DB.prepare('UPDATE map_sync SET issues_at = ?, issues_more = ? WHERE repo = ? AND sync_id = ?').bind(now, issues.more ? 1 : 0, repo, id));
-      res.issues = issues.list.length; res.issuesMore = issues.more;
+      stmts.push(full
+        ? env.DB.prepare('UPDATE map_sync SET issues_at = ?, issues_more = ?, issues_full_at = ? WHERE repo = ? AND sync_id = ?').bind(now, issues.more ? 1 : 0, now, repo, id)
+        : env.DB.prepare('UPDATE map_sync SET issues_at = ?, issues_more = ? WHERE repo = ? AND sync_id = ?').bind(now, issues.more ? 1 : 0, repo, id));
+      res.issues = issues.list.length; res.issuesMore = issues.more; res.issuesFull = full;
     }
     // 書き込みは1回の batch に（途中で失敗したら全部取り消し）。最後にロックを外す
     stmts.push(env.DB.prepare('UPDATE map_sync SET sync_id = NULL, sync_until = NULL WHERE repo = ? AND sync_id = ?').bind(repo, id));
@@ -178,15 +184,15 @@ export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | '
 }
 
 type IssueNode = { number: number; state: string; title: string; body: string | null; createdAt: string; updatedAt: string; closedAt: string | null; parent?: { number: number } | null };
-const ISSUE_Q = (withParent: boolean) => `query($o:String!,$n:String!,$after:String){repository(owner:$o,name:$n){issues(first:100,after:$after,orderBy:{field:CREATED_AT,direction:ASC}){pageInfo{hasNextPage endCursor} nodes{number state title body createdAt updatedAt closedAt${withParent ? ' parent{number}' : ''}}}}}`;
-/** Issue を全部読む（10ページ＝1000件まで。続きがあれば more）。親子の項目が使えない GitHub なら、親なしで読み直す */
-async function readIssues(env: Env, o: string, n: string) {
+const ISSUE_Q = (withParent: boolean) => `query($o:String!,$n:String!,$after:String,$since:DateTime){repository(owner:$o,name:$n){issues(first:100,after:$after,orderBy:{field:CREATED_AT,direction:ASC},filterBy:{since:$since}){pageInfo{hasNextPage endCursor} nodes{number state title body createdAt updatedAt closedAt${withParent ? ' parent{number}' : ''}}}}}`;
+/** Issue を読む（since があれば、その後に動いたものだけ。10ページ＝1000件まで。続きがあれば more）。親子の項目が使えない GitHub なら、親なしで読み直す */
+async function readIssues(env: Env, o: string, n: string, since: string | null = null) {
   for (const withParent of [true, false]) {
     try {
       const list: IssueNode[] = []; let after: string | null = null, more = false;
       for (let k = 0; k < 10; k++) {
         type Pg = { repository: { issues: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: IssueNode[] } } };
-        const d: Pg = await graphql<Pg>(env, ISSUE_Q(withParent), { o, n, after });
+        const d: Pg = await graphql<Pg>(env, ISSUE_Q(withParent), { o, n, after, since });
         list.push(...d.repository.issues.nodes);
         more = d.repository.issues.pageInfo.hasNextPage; after = d.repository.issues.pageInfo.endCursor;
         if (!more) break;
