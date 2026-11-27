@@ -714,7 +714,8 @@ export const CATALOGS: Record<string, Catalog> = {
    "name": "地図の画面",
    "desc": "機能ごとの稼働・Issue の経過・つながり・データの流れ（public/map.js）",
    "files": [
-    "^public/map\\.js"
+    "^public/map\\.js",
+    "^public/lineage\\.js"
    ],
    "data": [
     "d1"
