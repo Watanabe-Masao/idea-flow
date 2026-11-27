@@ -4,10 +4,16 @@ import { createServer, type Server } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fakeEnv } from '../fakeenv.ts';
 import { handleApi } from '../../src/api.ts';
+import { saveSource, syncRules } from '../../src/rules.ts';
 
 type Fx = { repo: string; base: string; prs: { number: number; title: string; mergedAt: string; body: string; files: string[] }[]; issues: { number: number; state: string; title: string; body: string; createdAt: string; updatedAt: string; closedAt: string | null }[] };
 const FX: Fx = JSON.parse(readFileSync(new URL('./fixture.json', import.meta.url), 'utf8'));
 const shift = Date.now() - Date.parse(FX.base) - 3600e3; // いちばん新しいものが1時間前になるように
+const DOCS: Record<string, string> = {
+  'CLAUDE.md': '# 全体\n- 決まりは docs/a.md と docs/b.md を読む\n',
+  'docs/a.md': '# 表\n- 表の列は画面の幅に合わせて六つまでにし、横に送る作りを使う\n',
+  'docs/b.md': '# 表\n- 表の列は画面の幅に合わせて六つまでにし、横に送る作りを使わない\n',
+};
 const at = (s: string | null) => s && new Date(Date.parse(s) + shift).toISOString();
 
 export async function start(port = 8788): Promise<Server> {
@@ -25,9 +31,14 @@ export async function start(port = 8788): Promise<Server> {
       const list = v.dir === 'DESC' ? [...all].reverse() : all, s = v.after ? Number(v.after) : 0;
       return Response.json({ data: { repository: { pullRequests: { pageInfo: { hasNextPage: s + v.first < list.length, endCursor: String(s + v.first) }, nodes: list.slice(s, s + v.first) } } } });
     }
+    // 文書の画面用：決まりの文書を2つ（とても近いが、片方が「使わない」＝食い違いの候補になる）
+    if (url.pathname.includes('/git/trees/')) return Response.json({ truncated: false, tree: Object.keys(DOCS).map(p => ({ path: p, type: 'blob', sha: p })) });
+    const m = url.pathname.match(/\/contents\/(.+)$/);
+    if (m && DOCS[decodeURIComponent(m[1])]) return new Response(DOCS[decodeURIComponent(m[1])]);
     return new Response('nf', { status: 404 });
   }) as typeof fetch;
   const env = fakeEnv() as any; env.GITHUB_TOKEN = 'x';
+  await saveSource(env, FX.repo, Object.keys(DOCS)); await syncRules(env, FX.repo);
   const pub = new URL('../../public/', import.meta.url);
   const srv = createServer(async (req, res) => {
     const chunks: Buffer[] = []; for await (const c of req) chunks.push(c as Buffer);

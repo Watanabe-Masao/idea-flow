@@ -55,6 +55,15 @@ const ghLink=(d,line)=>{const s=RV.sources.find(x=>x.repo===d.repo);return`https
 const fRepo=f=>{const d=rdoc(f.a)||rdoc((ritem(f.a)||{}).doc);return d?d.repo:(f.a.includes('|')?f.a.split('|')[0]:null)};
 function ruleCard(it){const d=rdoc(it.doc);return`<div style="padding:6px 0"><p style="margin:0">${esc(it.text)}</p><small>${esc(d.path)}${it.heading?' › '+esc(it.heading):''} ・ <a href="${esc(ghLink(d,it.line))}" target="_blank" rel="noopener">${it.line}行目</a></small></div>`}
 const ghFile=(repo,path,line)=>{const s=(RV.sources||[]).find(x=>x.repo===repo);return`https://github.com/${repo}/blob/${encodeURIComponent((s&&s.branch)||'main')}/${path.split('/').map(encodeURIComponent).join('/')}${line?'#L'+line:''}`};
+// 見つかった問題から、そのリポジトリの Issue の下書きを GitHub で開く（#9）。立てるかどうかは人が GitHub で決める（この道具は書かない）
+function issueDraft(f){const repo=fRepo(f);if(!repo)return'';
+ const where=it=>{if(!it)return'';const d=rdoc(it.doc);return d?`- ${d.path} ${it.line}行目：${it.text}\n  ${ghLink(d,it.line)}`:''};
+ const A=ritem(f.a),B=f.b?ritem(f.b):null,dA=rdoc(f.a),dB=f.b?rdoc(f.b):null;
+ const lines=[A?where(A):'',B?where(B):'',!A&&dA?`- ${dA.path}`:'',!B&&dB?`- ${dB.path}`:'',f.detail&&f.detail.path?`- ${f.detail.path}`:'',...(f.detail&&f.detail.refs||[]).map(r=>`- ${r.line}行目 → ${r.ref} は無い`),...(f.detail&&f.detail.docs||[]).map(x=>`- ${x}`)].filter(Boolean);
+ const head=(A&&rdoc(A.doc)||dA||{}).path||(f.detail&&f.detail.path)||'';
+ const title=`決まりと文書：「${FK[f.kind]||f.kind}」を確かめて直す${head?`（${head}）`:''}`;
+ const body=`機能：決まりと文書\n閉じる条件：この問題が idea-flow の文書の画面に出なくなる（直すか、「問題ではない」にする）\n\nidea-flow の文書の画面で見つかった問題：${FK[f.kind]||f.kind}${f.score?`（近さ ${(+f.score).toFixed(2)}）`:''}\n${lines.join('\n')}`.slice(0,3000);
+ return`https://github.com/${repo}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`}
 function findingHtml(f){let body='';
  if(f.kind==='no_entry'){body=`<p style="margin:4px 0">渡さないと届かない文書：${f.detail.docs.map(esc).join('、')}</p>${(f.detail.candidates||[]).map(c=>`<p style="margin:4px 0"><b>入口の候補：${esc(c.path)}</b><small>ここを入口から読ませると、参照をたどって ${c.reaches.map(esc).join('、')} にも届く</small></p>`).join('')}<p class="sub" style="margin:4px 0">候補は「ほかから参照されている数（まとめ役かどうか）」と「届く数」で選んでいます。入口にした文書の決まりはリポジトリ全体に効くので、全体に効いてよい中身かを確かめてください。</p>`}
  else if(f.kind==='unreferenced'){const d=rdoc(f.a);body=`<b>${esc(d.path)}</b><small>${f.detail.from&&f.detail.from.length?'参照しているのは '+f.detail.from.map(esc).join('、')+'（どれも入口から届かない）':'どの文書からも参照されていない'}</small>`}
@@ -63,7 +72,7 @@ function findingHtml(f){let body='';
  else if(f.kind==='orphan'){body=`<a href="${esc(ghFile(f.a.split('|')[0],f.detail.path))}" target="_blank" rel="noopener"><b>${esc(f.detail.path)}</b></a><small>${f.detail.record?'記録・結果の文書。':''}${f.detail.lines}行。どの文書からも案内されていない</small>`}
  else if(f.kind==='skill_overlap'){const a=rdoc(f.a),b=rdoc(f.b);body=`<b>${esc(a.title||a.path)}</b> と <b>${esc(b.title||b.path)}</b><small>説明文の近さ ${(+f.score).toFixed(2)}</small>`}
  else{const A=ritem(f.a),B=f.b?ritem(f.b):null;body=`${A?ruleCard(A):''}${B?`<p class="sub" style="margin:2px 0">↕ ${f.kind==='duplicate'?'ほぼ同じ':'近い'}（近さ ${(+f.score).toFixed(2)}）</p>${ruleCard(B)}`:''}${f.kind==='temporary'?`<small>当たった言葉：「${esc(f.detail.word)}」</small>`:''}${f.kind==='definition'?`<small>同じ言葉：${f.detail.terms.map(esc).join('、')}</small>`:''}`}
- return`<li>${body}<div class="row"><input data-why="${esc(f.key)}" placeholder="理由（任意）" style="flex:1 1 160px"><button class="btn s" data-dismiss="${esc(f.key)}">問題ではない</button></div></li>`}
+ return`<li>${body}<div class="row"><input data-why="${esc(f.key)}" placeholder="理由（任意）" style="flex:1 1 160px"><button class="btn s" data-dismiss="${esc(f.key)}">問題ではない</button>${issueDraft(f)?`<a class="btn s" href="${esc(issueDraft(f))}" target="_blank" rel="noopener">Issue の下書きを開く</a>`:''}</div></li>`}
 function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">読み込み中…</p>';return}
  if(RDOC){const d=rdoc(RDOC);if(!d){RDOC=null;return rulesView()}const its=RV.items.filter(i=>i.doc===d.id);
   const byH={};its.forEach(i=>(byH[i.heading||'（見出しなし）']=byH[i.heading||'（見出しなし）']||[]).push(i));
