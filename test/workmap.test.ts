@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeEnv } from './fakeenv.ts';
@@ -81,7 +82,10 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
     assert.equal((await syncMap(env, 'o/r', { mode: 'update' })).issuesFull, true); // 1日たったら全部読み直す
   } finally { globalThis.fetch = real; }
 
+  // 前からある行（digest の無い行）として地図を作る：全文から作って書き戻し、結果は今までどおり（以下の確かめがそのまま通る）
+  await env.DB.prepare("UPDATE pr_activity SET digest = NULL WHERE repo = 'o/r'").run();
   const v = await mapView(env, 'o/r', 21, '2026-11-27') as any;
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS c FROM pr_activity WHERE repo = 'o/r' AND digest IS NULL").first()).c, 0);
   assert.equal(v.days.at(-1), '2026-11-27');
   const f = (id: string) => v.features.find((x: any) => x.id === id);
   // #4 は UTC の 11/26 15:30 ＝ 日本時間の 11/27
@@ -234,4 +238,41 @@ test('推測の根拠には、その Issue の機能に当たったファイル�
     assert.match(ev, /src\/ui\/Moon\.tsx/);
     assert.doesNotMatch(ev, /\.github/);
   } finally { delete CATALOGS['o/x']; }
+});
+
+test('PR の説明の要る所だけ（digest）から読んでも、全文から読んだときと同じになる（#44）', async () => {
+  const { prDigest, parseReport, refLines, tagsOf } = await import('../src/workmap.ts');
+  const fx = JSON.parse(readFileSync(new URL('./e2e/fixture.json', import.meta.url), 'utf8'));
+  const bodies: string[] = [...fx.prs.map((p: { body: string }) => p.body),
+    '関連：なし\n書き方の見本：\n```\n## 確かめた決まり\n- a\n## 決まりになく、自分で判断した所\n- b\n## 足りなかった決まり\n- c\n```',
+    '長い説明\nいろいろ\n#12 の続き\nタグ：コールドムーン、絵本\n\n## 確かめた決まり\n- x\n続きの文\n---\n## 足りなかった決まり\n- なし',
+    '**確かめた決まり**：\n* y\n**自分で判断**\n- z\n\n関連 #3、#4',
+    // 外部の確かめ（18:20）で見つかった2例：行をまたぐタグと「関連：なし」
+    '説明\nタグ：\nコールドムーン\n\n## 確かめた決まり\n- a',
+    '説明\n関連：\nなし\n\n## 確かめた決まり\n- a',
+    'タグ：\n\n## 見出し\n- x', 'タグ：#12 #13\n関連：\n#5', '関連：なし\nタグ：絵本、@コールドムーン'];
+  let small = 0, all = 0;
+  for (const b of bodies) {
+    const d = prDigest(b); small += d.length; all += b.length;
+    assert.deepEqual(parseReport(d), parseReport(b));
+    assert.deepEqual(refLines(d), refLines(b));
+    assert.deepEqual(tagsOf(d), tagsOf(b));
+    assert.equal(/関連\s*[:：]\s*なし/.test(d), /関連\s*[:：]\s*なし/.test(b));
+  }
+  assert.ok(small < all * 0.7, `要る所だけで小さくなる（${small}/${all}）`);
+});
+
+test('地図：行をまたぐタグと「関連：なし」が、新しく取り込んだ行でも、書き戻した古い行でも消えない（#44・外部の確かめ）', async () => {
+  const { prDigest } = await import('../src/workmap.ts');
+  const R = 'Watanabe-Masao/weather-note-cf', day = '2026-11-27';
+  const B = { 1: '満月の物語：x\nタグ：\nコールドムーン\n\n## 確かめた決まり\n- a', 2: '関連：\nなし\n\n## 確かめた決まり\n- a' } as Record<number, string>;
+  for (const old of [false, true]) {
+    const env = fakeEnv() as any;
+    for (const n of [1, 2]) await env.DB.prepare('INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(R, n, `満月の物語：作業${n}`, 'u', `${day}T01:00:00Z`, B[n], '[]', `${day}T01:00:00Z`, '[]', old ? null : prDigest(B[n])).run();
+    const v = await mapView(env, R, 21, day) as any;
+    assert.ok((v.prTopics[1] ?? []).includes('コールドムーン'), `${old ? '書き戻し' : '新しく取り込み'}：タグ`);
+    const m2 = v.writing.misses.find((x: any) => x.n === 2);
+    assert.ok(!m2 || !m2.miss.includes('関係する Issue の番号'), `${old ? '書き戻し' : '新しく取り込み'}：関連：なし`);
+  }
 });

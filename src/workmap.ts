@@ -35,7 +35,8 @@ export function featuresOfFiles(cat: Catalog, files: string[]) {
  */
 /** 本文の「タグ：コールドムーン、絵本」を読む（@ や # は付けても付けなくてもよい） */
 export function tagsOf(body: string): string[] {
-  const m = body.match(/^\s*(?:[-*]\s*)?\**タグ\**\s*[:：]\s*(.+)$/m);
+  // 「タグ：」の次の行に書いてもよい。ただし次が見出しなら、タグは無いと読む（見出しをタグにしない）
+  const m = body.match(/^\s*(?:[-*]\s*)?\**タグ\**\s*[:：]\s*(?!#{1,6}\s)(.+)$/m);
   if (!m) return [];
   return [...new Set(m[1].split(/[、,，\s]+/).map(w => w.replace(/^[@＠#＃]/, '').trim()).filter(w => w && !/^\d+$/.test(w)))];
 }
@@ -127,9 +128,9 @@ export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | '
   if (st?.sync_id !== id) return { mode, busy: true, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st?.pr_done, caughtUp: false, issuesMore: false, issuesFull: false, calls: 0, ms: Date.now() - t0 };
   const mine = 'EXISTS (SELECT 1 FROM map_sync WHERE repo = ? AND sync_id = ?)';
   const save = (nodes: PrPage['repository']['pullRequests']['nodes']) => nodes.map(p => env.DB.prepare(
-    `INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${mine}
-     ON CONFLICT(repo, number) DO UPDATE SET title = excluded.title, body = excluded.body, files = excluded.files, fetched_at = excluded.fetched_at, closes = excluded.closes`)
-    .bind(repo, p.number, p.title, p.url, p.mergedAt, p.body ?? '', JSON.stringify((p.files?.nodes ?? []).map(f => f.path)), now, JSON.stringify((p.closingIssuesReferences?.nodes ?? []).map(x => x.number)), repo, id));
+    `INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes, digest) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${mine}
+     ON CONFLICT(repo, number) DO UPDATE SET title = excluded.title, body = excluded.body, files = excluded.files, fetched_at = excluded.fetched_at, closes = excluded.closes, digest = excluded.digest`)
+    .bind(repo, p.number, p.title, p.url, p.mergedAt, p.body ?? '', JSON.stringify((p.files?.nodes ?? []).map(f => f.path)), now, JSON.stringify((p.closingIssuesReferences?.nodes ?? []).map(x => x.number)), prDigest(p.body ?? ''), repo, id));
   const stmts: D1PreparedStatement[] = [];
   const res = { mode, busy: false, backfilled: 0, updated: 0, issues: 0, backfillDone: !!st.pr_done, caughtUp: false, issuesMore: false, issuesFull: false, calls: 0, ms: 0 };
   try {
@@ -305,6 +306,31 @@ export function parseReport(body: string) {
   }
   return found.size ? { ...sec, found: [...found], complete: found.size === 3 } : null;
 }
+/**
+ * PR の説明から、地図が使う行だけを残す（#44：地図のたびに全 PR の説明の全文を読むのが重さの大半だった）。
+ * 残すもの：番号（#n）の行・タグ・「関連：」・「機能：」・見出し・区切り線・コードブロックの囲み・申告の見出しの下の箇条書き。
+ * 地図が説明から読むもの（つながる番号・引き継ぎ・タグ・「関連：なし」・申告）は、全文から読んだときと同じになる（テストで確かめる）
+ */
+export function prDigest(body: string): string {
+  // タグと「関連：なし」は、行をまたいで書かれることがある（「タグ：」の次の行に名前など）。全文で先に判定して、決まった形の1行にして先頭に置く。
+  // 元のタグの行と、「関連：」だけで終わる行は残さない（短くしたあとで、次に残った行とつながって読まれないように）
+  const tags = tagsOf(String(body ?? '')), none = /関連\s*[:：]\s*なし/.test(String(body ?? ''));
+  const out: string[] = [...(tags.length ? [`タグ：${tags.join('、')}`] : []), ...(none ? ['関連：なし'] : [])];
+  let fence = false, inReport = false;
+  for (const raw of String(body ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (/^(```|~~~)/.test(line)) { fence = !fence; out.push(raw); continue; }
+    const ref = REF_RE.test(raw); REF_RE.lastIndex = 0;
+    if (!ref && (/^\s*(?:[-*]\s*)?\**タグ\**\s*[:：]/.test(raw) || /関連\s*[:：]\s*$/.test(raw))) continue;
+    const keep = ref || /関連|機能\**\s*[:：]/.test(raw);
+    if (fence) { if (keep) out.push(raw); continue; }
+    const head = /^(#{1,6}\s+|\*\*)(.+?)(\*\*)?[:：]?$/.test(line);
+    if (head) { inReport = /確かめた決まり|自分で判断|足りなかった決まり/.test(line); out.push(raw); continue; }
+    if (/^([-*_])\1{2,}$/.test(line)) { inReport = false; out.push(raw); continue; }
+    if (keep || (inReport && /^[-*・]\s*/.test(line))) out.push(raw);
+  }
+  return out.join('\n');
+}
 /** 申告の3つの見出しがすべてあるか（自己チェック・地図の守り具合・毎日の見直しで同じ判定を使う） */
 export const reportComplete = (body: string) => !!parseReport(body)?.complete;
 
@@ -339,8 +365,12 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   const sync = await env.DB.prepare('SELECT pr_done, issues_at, prs_at, reviewed_at, issues_more FROM map_sync WHERE repo = ?').bind(repo).first<{ pr_done: number; issues_at: string | null; prs_at: string | null; reviewed_at: string | null; issues_more: number }>();
   if (!cat) return { repo, catalog: false as const, sync };
   const days = Array.from({ length: span }, (_, k) => addDays(today, k - span + 1));
-  const prs: Pr[] = (await env.DB.prepare('SELECT number, title, url, merged_at, files, body, closes FROM pr_activity WHERE repo = ? ORDER BY merged_at DESC').bind(repo).all<Record<string, unknown>>()).results
-    .map(r => ({ ...r, files: JSON.parse(String(r.files)), closes: JSON.parse(String(r.closes ?? '[]')) }) as Pr);
+  // 説明は全文ではなく、要る行だけ（digest）を読む。digest の無い古い行だけ全文を読み、作って書き戻す（1回だけ）
+  const raw = (await env.DB.prepare('SELECT number, title, url, merged_at, files, closes, digest, CASE WHEN digest IS NULL THEN body END AS body FROM pr_activity WHERE repo = ? ORDER BY merged_at DESC').bind(repo).all<Record<string, unknown>>()).results;
+  const fill = raw.filter(r => r.digest == null).map(r => ({ n: Number(r.number), d: prDigest(String(r.body ?? '')) }));
+  for (let k = 0; k < fill.length; k += 50) await env.DB.batch(fill.slice(k, k + 50).map(x => env.DB.prepare('UPDATE pr_activity SET digest = ? WHERE repo = ? AND number = ? AND digest IS NULL').bind(x.d, repo, x.n)));
+  const dOf = new Map(fill.map(x => [x.n, x.d]));
+  const prs: Pr[] = raw.map(r => ({ number: r.number, title: r.title, url: r.url, merged_at: r.merged_at, files: JSON.parse(String(r.files)), closes: JSON.parse(String(r.closes ?? '[]')), body: String(r.digest ?? dOf.get(Number(r.number)) ?? '') }) as Pr);
   const of = new Map(prs.map(p => { const byFile = featuresOfFiles(cat, p.files), byTag = splitTags(cat, tagsOf(p.body)).features; return [p.number, [...new Set([...byFile.filter(id => !(byTag.length && cat.features.find(f => f.id === id)?.fallback)), ...byTag])]]; }));
   const prTopics = new Map(prs.map(p => [p.number, topicsOf(cat, p.title, p.body)]));
   const idx = new Map(days.map((d, k) => [d, k]));
