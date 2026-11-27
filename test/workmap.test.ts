@@ -291,7 +291,7 @@ test('今日：前回から変わったことの題は、その機能でいち�
 });
 
 test('プロジェクト（#77）：2つのリポジトリを1つの地図に束ね、同じ番号を見分け、リポジトリをまたぐ「の続き」をつなぐ', async () => {
-  const { qText, labelOf, featuresOfFiles } = await import('../src/workmap.ts');
+  const { qText, labelOf, featuresOfFiles, prDigest } = await import('../src/workmap.ts');
   const M = ['o/course', 'o/net'];
   // 本文の番号の書き換え
   assert.equal(qText('#3 と net#5 と o/course#7、https://github.com/o/net/issues/9', 1, M), '#2000003 と #2000005 と #1000007、#2000009');
@@ -326,5 +326,21 @@ test('プロジェクト（#77）：2つのリポジトリを1つの地図に束
     assert.equal(h?.kind, 'from');                                                                      // リポジトリをまたぐ引き継ぎ
     assert.match(h.evidence.join(' '), /course#3 の続き/);                                              // 文の中は「名前#番号」に戻る
     assert.deepEqual(v.features.find((f: any) => f.id === 'lab').total, 1);
+    assert.equal(h.url, 'https://github.com/o/course/issues/3');                                       // 内部の番号ではなく、その Issue の URL
+    // 外部の確かめ（2026-11-27 22:28）：画面側の PR の「Refs owner/course#577」で、教材側の #577 につながる。新しく取り込んだ（digest あり）・保存済み（digest なし）のどちらでも
+    for (const stored of [false, true]) {
+      const e2 = fakeEnv() as any;
+      for (const r of M) await e2.DB.prepare("INSERT INTO map_sync (repo, pr_done, prs_at, issues_at) VALUES (?, 1, ?, ?)").bind(r, d(0), d(0)).run();
+      const body = '画面側の図\n\nRefs O/course#577\n\n## 確かめた決まり\n- a';
+      await e2.DB.prepare('INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind('o/net', 339, '実験：離散の分布の図', 'https://github.com/o/net/pull/339', d(2), body, JSON.stringify(['src/lab/x.ts']), d(0), '[]', stored ? null : prDigest(body)).run();
+      await e2.DB.prepare('INSERT INTO map_issues (repo, number, open, title, body, created, updated, closed, refs) VALUES (?, ?, 1, ?, ?, ?, ?, NULL, ?)').bind('o/course', 577, '概念のページの概要を広げる', '機能：講座の中身\n閉じる条件：x', d(48), d(1), '[]').run();
+      const v2 = await mapView(e2, 'o/course', 21) as any;
+      const c = v2.issues.find((i: any) => i.number === 1000577);
+      assert.equal(c.url, 'https://github.com/o/course/issues/577');
+      const l = c.links.find((x: any) => x.type === 'pr');
+      assert.equal(l?.n, 2000339, `${stored ? '保存済み' : '新しく取り込み'}：教材の #577 から画面側の PR #339 をたどれる`);
+      assert.equal(l.url, 'https://github.com/o/net/pull/339');
+    }
   } finally { delete CATALOGS['o/course']; }
 });
