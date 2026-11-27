@@ -135,7 +135,7 @@ for (const k of kinds) {
     // 住所で開き直す
     // WebKit では、開き直し（reload）のあとに画面が出ないことがまれにある（統計検定アプリの CI でも同じ揺れ）。開き直しを1回だけやり直す
     await pg.reload({ waitUntil: 'load' });
-    if (!(await pg.locator('.ln-node.here').first().waitFor({ timeout: 15000 }).then(() => true, () => false))) { await pg.reload({ waitUntil: 'load' }); await pg.waitForSelector('.ln-node.here', { timeout: 30000 }); }
+    if (!(await pg.locator('.ln-node.here').first().waitFor({ timeout: 15000 }).then(() => true, () => false))) { console.log(`E2E_RETRY ${k} 系譜の開き直し`); await pg.reload({ waitUntil: 'load' }); await pg.waitForSelector('.ln-node.here', { timeout: 30000 }); }
     assert.match(await pg.locator('.ln-node.here .ln-t').innerText(), /^#53 /);
     // 戻る（開き直したあとは戻り先が無いので、見方のタブで）
     await pg.click('[data-view="cluster"]');
