@@ -118,7 +118,8 @@ function issueView(d, s) {
   const opened = [], closedN = [], openAt = [];
   for (let k = t0; k <= today; k++) { opened.push(all.filter(i => dnum(i.created) === k).length); closedN.push(all.filter(i => i.closed && dnum(i.closed) === k).length); openAt.push(all.filter(i => dnum(i.created) <= k && (!i.closed || dnum(i.closed) > k)).length); }
   const max = Math.max(1, ...openAt, ...opened, ...closedN), W = 100, H = 60, px = k => (k / Math.max(1, N)) * W, py = v => H - v / max * (H - 6) - 2;
-  const area = `M0 ${H} ` + openAt.map((v, k) => `L${px(k)} ${py(v)}`).join(' ') + ` L${W} ${H} Z`;
+  // 最後の日の値を右端まで伸ばしてから閉じる（範囲が0日のとき、斜めの面にならないように）
+  const area = `M0 ${H} ` + openAt.map((v, k) => `L${px(k)} ${py(v)}`).join(' ') + ` L${W} ${py(openAt.at(-1) ?? 0)} L${W} ${H} Z`;
   const bars = (arr, cls, dx) => arr.map((v, k) => v ? `<rect x="${px(k) + dx}" y="${py(v)}" width="1.2" height="${H - 2 - py(v)}" fill="${cls}"/>` : '').join('');
   const closed = all.filter(i => !i.open), dur = closed.map(i => dnum(i.closed) - dnum(i.created)).sort((a, b) => a - b);
   const h = dur.length >> 1, med = dur.length ? (dur.length % 2 ? dur[h] : Math.round((dur[h - 1] + dur[h]) / 2 * 10) / 10) : null; // 偶数件なら真ん中2つの平均

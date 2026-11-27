@@ -13,6 +13,7 @@ h1{font-size:clamp(24px,4vw,34px);line-height:1.1;margin:0 0 4px}
 .btn,.tab{font:inherit;font-size:14px;min-height:44px;padding:0 14px;border-radius:10px;border:1px solid var(--ink);background:transparent;color:var(--ink);cursor:pointer}
 .tab{border-radius:999px;border-color:var(--line);background:var(--panel)}.tab[aria-selected=true],.btn.p{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .btn:disabled{opacity:.5}
+.btn.s{min-height:36px;font-size:13px;padding:0 10px}.badge.k{background:transparent;border:1px dashed var(--line);color:var(--mute)}
 input{font:inherit;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink)}
 .fig{position:relative}.fig svg{display:block;width:100%}
 .legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--mute);padding:6px 4px 0}
@@ -30,7 +31,7 @@ table{border-collapse:collapse;font-size:13px;width:100%}td,th{padding:4px 6px;b
 .q{font-size:18px;line-height:1.45;margin:6px 0 2px}.to{font-size:16px;margin:12px 0 4px}.prog{height:4px;background:var(--soft);border-radius:2px;overflow:hidden;margin:6px 0 10px}.prog i{display:block;height:100%;background:var(--ink)}
 .big{flex:1;min-height:52px;font-size:16px}select{font:inherit;font-size:15px;min-height:44px;padding:0 8px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);width:100%}
 .alts{display:flex;flex-direction:column;gap:6px;margin-top:6px}.alts .btn{text-align:left;min-height:44px;padding:6px 12px;line-height:1.35}
-</style></head><body><div class="wrap"><body><div class="wrap">
+</style></head><body><div class="wrap">
 <h1>idea-flow</h1>
 <p class="sub">開発の地図：機能ごとの作業・Issue の経過・決まりの文書を、GitHub から読んで見えるようにする道具。Claude も同じ地図を読んでから作業する。</p>
 <div class="card" id="gate" hidden><label for="tok" class="sub">合言葉（ADMIN_TOKEN）</label><div class="row"><input id="tok" type="password" autocomplete="current-password" style="flex:1"><button class="btn p" id="saveTok">使う</button></div></div>
