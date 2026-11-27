@@ -246,7 +246,11 @@ test('PR の説明の要る所だけ（digest）から読んでも、全文か�
   const bodies: string[] = [...fx.prs.map((p: { body: string }) => p.body),
     '関連：なし\n書き方の見本：\n```\n## 確かめた決まり\n- a\n## 決まりになく、自分で判断した所\n- b\n## 足りなかった決まり\n- c\n```',
     '長い説明\nいろいろ\n#12 の続き\nタグ：コールドムーン、絵本\n\n## 確かめた決まり\n- x\n続きの文\n---\n## 足りなかった決まり\n- なし',
-    '**確かめた決まり**：\n* y\n**自分で判断**\n- z\n\n関連 #3、#4'];
+    '**確かめた決まり**：\n* y\n**自分で判断**\n- z\n\n関連 #3、#4',
+    // 外部の確かめ（18:20）で見つかった2例：行をまたぐタグと「関連：なし」
+    '説明\nタグ：\nコールドムーン\n\n## 確かめた決まり\n- a',
+    '説明\n関連：\nなし\n\n## 確かめた決まり\n- a',
+    'タグ：\n\n## 見出し\n- x', 'タグ：#12 #13\n関連：\n#5', '関連：なし\nタグ：絵本、@コールドムーン'];
   let small = 0, all = 0;
   for (const b of bodies) {
     const d = prDigest(b); small += d.length; all += b.length;
@@ -256,4 +260,19 @@ test('PR の説明の要る所だけ（digest）から読んでも、全文か�
     assert.equal(/関連\s*[:：]\s*なし/.test(d), /関連\s*[:：]\s*なし/.test(b));
   }
   assert.ok(small < all * 0.7, `要る所だけで小さくなる（${small}/${all}）`);
+});
+
+test('地図：行をまたぐタグと「関連：なし」が、新しく取り込んだ行でも、書き戻した古い行でも消えない（#44・外部の確かめ）', async () => {
+  const { prDigest } = await import('../src/workmap.ts');
+  const R = 'Watanabe-Masao/weather-note-cf', day = '2026-11-27';
+  const B = { 1: '満月の物語：x\nタグ：\nコールドムーン\n\n## 確かめた決まり\n- a', 2: '関連：\nなし\n\n## 確かめた決まり\n- a' } as Record<number, string>;
+  for (const old of [false, true]) {
+    const env = fakeEnv() as any;
+    for (const n of [1, 2]) await env.DB.prepare('INSERT INTO pr_activity (repo, number, title, url, merged_at, body, files, fetched_at, closes, digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(R, n, `満月の物語：作業${n}`, 'u', `${day}T01:00:00Z`, B[n], '[]', `${day}T01:00:00Z`, '[]', old ? null : prDigest(B[n])).run();
+    const v = await mapView(env, R, 21, day) as any;
+    assert.ok((v.prTopics[1] ?? []).includes('コールドムーン'), `${old ? '書き戻し' : '新しく取り込み'}：タグ`);
+    const m2 = v.writing.misses.find((x: any) => x.n === 2);
+    assert.ok(!m2 || !m2.miss.includes('関係する Issue の番号'), `${old ? '書き戻し' : '新しく取り込み'}：関連：なし`);
+  }
 });

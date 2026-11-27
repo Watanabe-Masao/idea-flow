@@ -35,7 +35,8 @@ export function featuresOfFiles(cat: Catalog, files: string[]) {
  */
 /** 本文の「タグ：コールドムーン、絵本」を読む（@ や # は付けても付けなくてもよい） */
 export function tagsOf(body: string): string[] {
-  const m = body.match(/^\s*(?:[-*]\s*)?\**タグ\**\s*[:：]\s*(.+)$/m);
+  // 「タグ：」の次の行に書いてもよい。ただし次が見出しなら、タグは無いと読む（見出しをタグにしない）
+  const m = body.match(/^\s*(?:[-*]\s*)?\**タグ\**\s*[:：]\s*(?!#{1,6}\s)(.+)$/m);
   if (!m) return [];
   return [...new Set(m[1].split(/[、,，\s]+/).map(w => w.replace(/^[@＠#＃]/, '').trim()).filter(w => w && !/^\d+$/.test(w)))];
 }
@@ -311,12 +312,17 @@ export function parseReport(body: string) {
  * 地図が説明から読むもの（つながる番号・引き継ぎ・タグ・「関連：なし」・申告）は、全文から読んだときと同じになる（テストで確かめる）
  */
 export function prDigest(body: string): string {
-  const out: string[] = [];
+  // タグと「関連：なし」は、行をまたいで書かれることがある（「タグ：」の次の行に名前など）。全文で先に判定して、決まった形の1行にして先頭に置く。
+  // 元のタグの行と、「関連：」だけで終わる行は残さない（短くしたあとで、次に残った行とつながって読まれないように）
+  const tags = tagsOf(String(body ?? '')), none = /関連\s*[:：]\s*なし/.test(String(body ?? ''));
+  const out: string[] = [...(tags.length ? [`タグ：${tags.join('、')}`] : []), ...(none ? ['関連：なし'] : [])];
   let fence = false, inReport = false;
   for (const raw of String(body ?? '').split(/\r?\n/)) {
     const line = raw.trim();
     if (/^(```|~~~)/.test(line)) { fence = !fence; out.push(raw); continue; }
-    const keep = REF_RE.test(raw) || /タグ|関連|機能\**\s*[:：]/.test(raw); REF_RE.lastIndex = 0;
+    const ref = REF_RE.test(raw); REF_RE.lastIndex = 0;
+    if (!ref && (/^\s*(?:[-*]\s*)?\**タグ\**\s*[:：]/.test(raw) || /関連\s*[:：]\s*$/.test(raw))) continue;
+    const keep = ref || /関連|機能\**\s*[:：]/.test(raw);
     if (fence) { if (keep) out.push(raw); continue; }
     const head = /^(#{1,6}\s+|\*\*)(.+?)(\*\*)?[:：]?$/.test(line);
     if (head) { inReport = /確かめた決まり|自分で判断|足りなかった決まり/.test(line); out.push(raw); continue; }
