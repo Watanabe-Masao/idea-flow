@@ -103,7 +103,7 @@ export async function selfCheck(env: Env, repo: string, a: Record<string, unknow
   const rows = (await env.DB.prepare('SELECT number, open, title, body FROM map_issues WHERE repo = ?').bind(repo).all<{ number: number; open: number; title: string; body: string }>()).results;
   const issues = new Map(rows.map(r => [r.number, { open: !!r.open, title: r.title }]));
   // 既にある話題：Issue と PR の本文のタグ（機能でないもの）
-  const prBodies = (await env.DB.prepare('SELECT body FROM pr_activity WHERE repo = ?').bind(repo).all<{ body: string }>()).results;
+  const prBodies = (await env.DB.prepare('SELECT COALESCE(digest, body) AS body FROM pr_activity WHERE repo = ?').bind(repo).all<{ body: string }>()).results;
   const known = new Set([...rows, ...prBodies].flatMap(r => splitTags(cat, tagsOf(r.body)).topics));
   const kind = a.pr != null ? 'pr' : a.issue != null ? 'issue' : String(a.kind ?? (a.files ? 'pr' : ''));
   let head = '', items: Item[];

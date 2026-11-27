@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeEnv } from './fakeenv.ts';
@@ -81,7 +82,10 @@ test('PR と Issue を取り込み、稼働・状態・古くなっている候�
     assert.equal((await syncMap(env, 'o/r', { mode: 'update' })).issuesFull, true); // 1日たったら全部読み直す
   } finally { globalThis.fetch = real; }
 
+  // 前からある行（digest の無い行）として地図を作る：全文から作って書き戻し、結果は今までどおり（以下の確かめがそのまま通る）
+  await env.DB.prepare("UPDATE pr_activity SET digest = NULL WHERE repo = 'o/r'").run();
   const v = await mapView(env, 'o/r', 21, '2026-11-27') as any;
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS c FROM pr_activity WHERE repo = 'o/r' AND digest IS NULL").first()).c, 0);
   assert.equal(v.days.at(-1), '2026-11-27');
   const f = (id: string) => v.features.find((x: any) => x.id === id);
   // #4 は UTC の 11/26 15:30 ＝ 日本時間の 11/27
@@ -234,4 +238,22 @@ test('推測の根拠には、その Issue の機能に当たったファイル�
     assert.match(ev, /src\/ui\/Moon\.tsx/);
     assert.doesNotMatch(ev, /\.github/);
   } finally { delete CATALOGS['o/x']; }
+});
+
+test('PR の説明の要る所だけ（digest）から読んでも、全文から読んだときと同じになる（#44）', async () => {
+  const { prDigest, parseReport, refLines, tagsOf } = await import('../src/workmap.ts');
+  const fx = JSON.parse(readFileSync(new URL('./e2e/fixture.json', import.meta.url), 'utf8'));
+  const bodies: string[] = [...fx.prs.map((p: { body: string }) => p.body),
+    '関連：なし\n書き方の見本：\n```\n## 確かめた決まり\n- a\n## 決まりになく、自分で判断した所\n- b\n## 足りなかった決まり\n- c\n```',
+    '長い説明\nいろいろ\n#12 の続き\nタグ：コールドムーン、絵本\n\n## 確かめた決まり\n- x\n続きの文\n---\n## 足りなかった決まり\n- なし',
+    '**確かめた決まり**：\n* y\n**自分で判断**\n- z\n\n関連 #3、#4'];
+  let small = 0, all = 0;
+  for (const b of bodies) {
+    const d = prDigest(b); small += d.length; all += b.length;
+    assert.deepEqual(parseReport(d), parseReport(b));
+    assert.deepEqual(refLines(d), refLines(b));
+    assert.deepEqual(tagsOf(d), tagsOf(b));
+    assert.equal(/関連\s*[:：]\s*なし/.test(d), /関連\s*[:：]\s*なし/.test(b));
+  }
+  assert.ok(small < all * 0.7, `要る所だけで小さくなる（${small}/${all}）`);
 });
