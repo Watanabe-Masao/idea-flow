@@ -48,7 +48,7 @@ document.head.appendChild(css);
 // 状態は、見た事実のまま言う（「止まっている」と決めつけない）
 const ST = ['直近4日に3件以上マージ', '直近7日にマージあり', '直近7日マージなし'];
 const S = {}; let EL = null, REPO = '';
-const st = r => S[r] || (S[r] = { data: null, span: 21, view: 'feat', ifilt: 'all', isel: null, ifocus: null, cl: null, csel: null, cand: false, filt: -1, sel: null, node: null, busy: false, note: '', synced: false });
+const st = r => S[r] || (S[r] = { data: null, span: 21, view: 'feat', ifilt: 'all', isel: null, ifocus: null, cl: null, csel: null, cand: false, lin: null, linBack: null, filt: -1, sel: null, node: null, busy: false, note: '', synced: false });
 const lv = n => n === 0 ? 'var(--line)' : n <= 1 ? 'var(--h1)' : n <= 3 ? 'var(--h2)' : 'var(--h3)';
 const md = d => d ? d.slice(5).replace('-', '/') : '';
 const GH = r => `https://github.com/${r}`;
@@ -238,7 +238,7 @@ function clusterView(d, s) {
   let det = '<p class="sub" style="margin-top:8px">四角を押すと、つながりの根拠が出ます。</p>';
   // スマホでは、題はすぐ上の行に出ているので繰り返さない
   const issueDet = i => `<div class="wm-det" style="${phone ? 'margin-top:0' : 'border-top:1px solid var(--ink);border-radius:10px;margin-top:8px'}">${phone ? '' : `<a href="${i.url || GH(REPO) + '/issues/' + i.number}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">Issue #${i.number} ${esc(i.title)}</a>`}<div>立てた ${md(i.created)}${i.closed ? '・閉じた ' + md(i.closed) : '・開いている'}${i.stale ? '<span class="wm-stale">古くなっている候補</span>' : ''}</div>
-    <div class="row" style="margin-top:6px"><button class="btn" data-totl="${i.number}" style="min-height:36px">Issue の経過で見る</button>${phone ? `<a href="${i.url || GH(REPO) + '/issues/' + i.number}" target="_blank" rel="noopener" style="align-self:center;font-size:13px">GitHub で開く</a>` : ''}</div>${linkHead(i, s)}${linkList(i, s)}</div>`;
+    <div class="row" style="margin-top:6px"><button class="btn" data-lin="${i.number}" style="min-height:36px">系譜を見る</button><button class="btn" data-totl="${i.number}" style="min-height:36px">Issue の経過で見る</button>${phone ? `<a href="${i.url || GH(REPO) + '/issues/' + i.number}" target="_blank" rel="noopener" style="align-self:center;font-size:13px">GitHub で開く</a>` : ''}</div>${linkHead(i, s)}${linkList(i, s)}</div>`;
   if (sel && sel.startsWith('i')) { const i = d.issues.find(x => x.number === +sel.slice(1)); if (i) det = issueDet(i); }
   if (sel && sel.startsWith('p')) { const p = prs.find(x => 'p' + x.n === sel); if (p) det = `<div class="wm-det" style="border-top:1px solid var(--ink);border-radius:10px;margin-top:8px"><a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--ink);font-weight:600">PR #${p.n} ${esc(p.title)}</a><div>マージ ${md(p.day)}</div>${p.edges.map(e => `<div class="wm-link"><span class="wm-kind${e.kind === 'candidate' ? ' k' : ''}">${LKOF(e.kind)[0]}</span>Issue #${e.i}${e.ev.map(x => `<div class="ev">根拠：${esc(x)}</div>`).join('')}</div>`).join('')}</div>`; }
   s._sheet = null;
@@ -292,6 +292,7 @@ function draw() {
   if (s.view === 'cluster') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${clusterView(d, s)}</div>`, d && d.names); sheet(s._sheet); return; }
   sheet(null);
   if (s.view === 'issue') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${issueView(d, s)}</div>`, d && d.names); return; }
+  if (s.view === 'lineage') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${window.Lineage.render(d, s.lin, { cand: s.cand, back: s.linBack && s.linBack.name })}</div>`, d && d.names); return; }
   const c = d.counts, n = d.days.length, step = n > 30 ? 14 : 7;
   let rows = '', g = '';
   for (const f of d.features) {
@@ -355,8 +356,10 @@ function bind(el) {
     const s = st(REPO), t = e.target;
     if (t.closest('#wmsync')) { sync(REPO); return; }
     const sp = t.closest('[data-span]'); if (sp) { s.span = +sp.dataset.span; hideDay(); load(REPO).then(draw).catch(err => { s.note = err.message; draw(); }); return; }
-    const vw = t.closest('[data-view]'); if (vw) { s.view = vw.dataset.view; s.from = null; hideDay(); draw(); return; }
+    const vw = t.closest('[data-view]'); if (vw) { s.view = vw.dataset.view; s.from = null; s.linBack = null; setHash(null); hideDay(); draw(); return; }
     const ifl = t.closest('[data-ifilt]'); if (ifl) { s.ifilt = ifl.dataset.ifilt; draw(); return; }
+    const ln = t.closest('[data-lin]'); if (ln) { e.preventDefault(); openLineage(+ln.dataset.lin, true); return; }
+    if (t.closest('[data-lnback]') && s.linBack) { const b = s.linBack; s.view = b.view; s.cl = b.cl; s.csel = b.csel; s.ifocus = b.ifocus; s.linBack = null; s.lin = null; setHash(null); draw(); return; }
     const tt = t.closest('[data-totl]'); if (tt) { s.from = { cl: s.cl, csel: s.csel, name: (EL.querySelector('.wm-pick b') || EL.querySelector('.wm-chip[aria-pressed="true"]'))?.textContent.replace(/\s+(PR\s*)?\d+(\/\d+)?$/, '') || '関連する作業' }; s.view = 'issue'; s.isel = +tt.dataset.totl; s.ifocus = +tt.dataset.totl; s.ifilt = 'all'; draw(); (EL.querySelector('.wm-pick') || EL.querySelector(`.wm-tl[data-i="${s.isel}"]`))?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     const cl = t.closest('[data-cl]'); if (cl) { s.cl = cl.dataset.cl; s.csel = null; s.pick = false; s.q = ''; draw(); return; }
     const pk = t.closest('[data-pick]'); if (pk) { s.pick = pk.dataset.pick === '1'; draw(); if (s.pick) EL.querySelector('#wmq')?.focus(); return; }
@@ -378,9 +381,18 @@ function bind(el) {
   el.addEventListener('keydown', e => { if (e.target.id === 'wmq' && e.key === 'Enter') { e.preventDefault(); const st0 = st(REPO); st0.q = e.target.value; draw(); return; } const r = e.target.closest('.wm-row') || e.target.closest('.wm-tl') || e.target.closest('.wm-cn'); if (r && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); r.click(); } });
 }
 
+// 系譜の画面（#70）：住所は #repo=…&lineage=n。開いた所に戻れるよう、元の見方を覚える
+function setHash(n) { try { history.replaceState(null, '', n ? `#repo=${encodeURIComponent(REPO)}&lineage=${n}` : location.pathname + location.search); } catch { /* 住所が書けなくても画面は出す */ } }
+function openLineage(n, keepBack) {
+  const s = st(REPO);
+  if (keepBack && s.view !== 'lineage') s.linBack = { view: s.view, cl: s.cl, csel: s.csel, ifocus: s.ifocus, name: { feat: '機能に戻る', cluster: '関連する作業に戻る', issue: 'Issue の経過に戻る' }[s.view] || '戻る' };
+  s.view = 'lineage'; s.lin = n; setHash(n); draw(); EL && EL.scrollIntoView({ block: 'start' });
+}
 async function render(el, repo) {
   EL = el; REPO = repo; bind(el); hideDay(); draw();
   const s = st(repo);
+  // 住所に系譜があれば、その系譜を開く
+  const h = new URLSearchParams(location.hash.slice(1)); if (h.get('repo') === repo && h.get('lineage')) { s.view = 'lineage'; s.lin = +h.get('lineage'); }
   try { await load(repo); draw(); } catch (e) { s.note = e.message; draw(); return; }
   // 開いたときに一度だけ、静かに新しい PR と Issue を読む
   if (!s.synced && s.data?.catalog) sync(repo);

@@ -6,7 +6,7 @@ import { LIST, PLAIN_APPLIES } from './diagnosis.ts';
 import { embedMany, loadVectors } from './embed.ts';
 import { dot } from './vec.ts';
 import { safeEqual } from './util.ts';
-import { mapAction } from './mcpmap.ts';
+import { mapAction, setOrigin } from './mcpmap.ts';
 
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
@@ -215,6 +215,7 @@ async function handle(env: Env, m: Rpc) {
 }
 
 export async function handleMcp(req: Request, env: Env, token: string): Promise<Response> {
+  setOrigin(new URL(req.url).origin);
   if (!env.MCP_TOKEN || !safeEqual(token, env.MCP_TOKEN)) return new Response('Not found', { status: 404 });
   if (req.method === 'GET') return new Response('Method Not Allowed', { status: 405, headers: { allow: 'POST' } });
   if (req.method === 'DELETE') return new Response(null, { status: 204 });

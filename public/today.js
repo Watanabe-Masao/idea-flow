@@ -22,8 +22,9 @@ const btn = (it, d, l, href) => href
 function acts(it) {
   if (it.kind === 'own' || it.kind === 'lack') return btn(it, 'ok', 'それでいい') + btn(it, 'rule', '決まりにする', draft(it)) + btn(it, 'no', '違う（PR で伝える）', it.url);
   // 閉じるかどうかは GitHub で決める。開くだけではカードを消さない（閉じたら、次に読み直したときに消える）
-  if (it.kind === 'close') return `<a class="btn s" href="${esc(it.url)}" target="_blank" rel="noopener">GitHub で開く</a>` + btn(it, 'later', 'まだ閉じない');
-  return (it.url ? btn(it, 'ok', 'GitHub で見る', it.url) : '') + btn(it, 'ok', '見た');
+  const lin = it.kind === 'close' && it.n ? `<a class="btn s" href="#repo=${encodeURIComponent(REPO)}&lineage=${it.n}">系譜を見る</a>` : '';
+  if (it.kind === 'close') return lin + `<a class="btn s" href="${esc(it.url)}" target="_blank" rel="noopener">GitHub で開く</a>` + btn(it, 'later', 'まだ閉じない');
+  return (it.kind === 'stale' && it.n ? `<a class="btn s" href="#repo=${encodeURIComponent(REPO)}&lineage=${it.n}">系譜を見る</a>` : '') + (it.url ? btn(it, 'ok', 'GitHub で見る', it.url) : '') + btn(it, 'ok', '見た');
 }
 function card(it) {
   const jl = (it.own || []).map(x => `<li>${esc(x)}</li>`).join('') + (it.lack || []).map(x => `<li class="td-lack">足りなかった決まり：${esc(x)}</li>`).join('');
