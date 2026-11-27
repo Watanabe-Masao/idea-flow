@@ -185,19 +185,19 @@ test('同期：重なったら後の方は何もしない／ロックが切れ�
     const q = JSON.parse(String(init!.body)), v = q.variables;
     if (q.query.includes('issues(')) return Response.json({ data: { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } });
     const start = v.after ? Number(v.after) : 0;
-    const nodes = Array.from({ length: Math.min(50, N - start) }, (_, i) => pr(start + i + 1, title)); // 答えの中身は、問い合わせた時点の題
+    const nodes = Array.from({ length: Math.min(v.first, N - start) }, (_, i) => pr(start + i + 1, title)); // 答えの中身は、問い合わせた時点の題
     if (hold) await new Promise<void>(r => { pause = r; });
-    return Response.json({ data: { repository: { pullRequests: { pageInfo: { hasNextPage: start + 50 < N, endCursor: String(start + 50) }, nodes } } } });
+    return Response.json({ data: { repository: { pullRequests: { pageInfo: { hasNextPage: start + v.first < N, endCursor: String(start + v.first) }, nodes } } } });
   }) as typeof fetch;
   try {
     // 前回の境界：いちばん古い（201番目）より前
     await env.DB.prepare("INSERT INTO map_sync (repo, pr_done, prs_at) VALUES ('o/r', 1, ?)").bind(prev).run();
     const a = await syncMap(env, 'o/r', { mode: 'update' });
-    assert.deepEqual([a.updated, a.caughtUp], [200, false]);          // 4ページで止まる。境界にはまだ届かない
+    assert.deepEqual([a.updated, a.caughtUp], [160, false]);          // 4ページ（1ページ目は10件・あとは50件）で止まる。境界にはまだ届かない
     let row = await env.DB.prepare("SELECT prs_at, upd_cursor FROM map_sync WHERE repo = 'o/r'").first();
-    assert.deepEqual([row.prs_at, row.upd_cursor], [prev, '200']); // 最終成功時刻は進めない
+    assert.deepEqual([row.prs_at, row.upd_cursor], [prev, '160']); // 最終成功時刻は進めない
     const b = await syncMap(env, 'o/r', { mode: 'update' });
-    assert.deepEqual([b.updated, b.caughtUp], [1, true]);             // 残りの1件を続きから拾う
+    assert.deepEqual([b.updated, b.caughtUp], [41, true]);            // 残りの41件を続きから拾う（続きからは50件ずつ）
     row = await env.DB.prepare("SELECT prs_at, upd_cursor FROM map_sync WHERE repo = 'o/r'").first();
     assert.equal(row.upd_cursor, null);
     const c = await syncMap(env, 'o/r', { mode: 'update' });
