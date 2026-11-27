@@ -102,7 +102,7 @@ async function graphql<T>(env: Env, query: string, variables: Record<string, unk
   throw new Error('GitHub（GraphQL）: ' + last);
 }
 
-const PR_Q = `query($o:String!,$n:String!,$after:String,$dir:OrderDirection!,$field:IssueOrderField!){repository(owner:$o,name:$n){pullRequests(states:MERGED,first:50,after:$after,orderBy:{field:$field,direction:$dir}){pageInfo{hasNextPage endCursor} nodes{number title url mergedAt updatedAt body files(first:100){nodes{path}} closingIssuesReferences(first:10){nodes{number}}}}}}`;
+const PR_Q = `query($o:String!,$n:String!,$after:String,$dir:OrderDirection!,$field:IssueOrderField!,$first:Int!){repository(owner:$o,name:$n){pullRequests(states:MERGED,first:$first,after:$after,orderBy:{field:$field,direction:$dir}){pageInfo{hasNextPage endCursor} nodes{number title url mergedAt updatedAt body files(first:100){nodes{path}} closingIssuesReferences(first:10){nodes{number}}}}}}`;
 type PrPage = { repository: { pullRequests: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { number: number; title: string; url: string; mergedAt: string; updatedAt?: string; body: string; files: { nodes: { path: string }[] } | null; closingIssuesReferences?: { nodes: { number: number }[] } | null }[] } } };
 
 type SyncRow = { pr_cursor: string | null; pr_done: number; prs_at: string | null; issues_at: string | null; issues_more?: number; issues_full_at?: string | null; sync_id: string | null; sync_until: string | null; upd_cursor: string | null; upd_boundary: string | null; upd_started: string | null };
@@ -136,7 +136,7 @@ export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | '
     if (mode === 'backfill') {
       let cursor = st.pr_cursor, done = !!st.pr_done;
       for (let k = 0; k < pages && !done; k++) {
-        const pr = (await graphql<PrPage>(env, PR_Q, { o, n, after: cursor, dir: 'ASC', field: 'CREATED_AT' })).repository.pullRequests;
+        const pr = (await graphql<PrPage>(env, PR_Q, { o, n, after: cursor, dir: 'ASC', field: 'CREATED_AT', first: 50 })).repository.pullRequests;
         stmts.push(...save(pr.nodes)); res.backfilled += pr.nodes.length;
         if (pr.pageInfo.endCursor) cursor = pr.pageInfo.endCursor;
         if (!pr.pageInfo.hasNextPage) done = true;
@@ -147,7 +147,9 @@ export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | '
       const boundary = st.upd_boundary ?? st.prs_at, started = st.upd_started ?? now;
       let after = st.upd_cursor, caught = false;
       for (let k = 0; k < 4; k++) {
-        const rp = (await graphql<PrPage>(env, PR_Q, { o, n, after, dir: 'DESC', field: 'UPDATED_AT' })).repository.pullRequests;
+        // 続きからでなければ、1ページ目は10件だけ（ふだんは動いた PR が少なく、これで境界に届く。#44：更新0件でも50件読んでいたのが重さの大半）
+        const first = k === 0 && !after && boundary ? 10 : 50;
+        const rp = (await graphql<PrPage>(env, PR_Q, { o, n, after, dir: 'DESC', field: 'UPDATED_AT', first })).repository.pullRequests;
         // 数えるのは前回の境界より新しく動いたものだけ（ページの残りは、もう持っている分）
         stmts.push(...save(rp.nodes)); res.updated += rp.nodes.filter(p => !boundary || (p.updatedAt ?? '') >= boundary).length;
         if (!boundary || rp.nodes.some(p => (p.updatedAt ?? '') < boundary) || !rp.pageInfo.hasNextPage) { caught = true; break; }

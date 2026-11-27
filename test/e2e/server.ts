@@ -23,7 +23,7 @@ export async function start(port = 8788): Promise<Server> {
     if (q && q.query.includes('pullRequests')) {
       const v = q.variables, all = FX.prs.map(p => ({ number: p.number, title: p.title, url: `https://github.com/${FX.repo}/pull/${p.number}`, mergedAt: at(p.mergedAt), updatedAt: at(p.mergedAt), body: p.body, files: { nodes: p.files.map(path => ({ path })) }, closingIssuesReferences: { nodes: [] } }));
       const list = v.dir === 'DESC' ? [...all].reverse() : all, s = v.after ? Number(v.after) : 0;
-      return Response.json({ data: { repository: { pullRequests: { pageInfo: { hasNextPage: s + 50 < list.length, endCursor: String(s + 50) }, nodes: list.slice(s, s + 50) } } } });
+      return Response.json({ data: { repository: { pullRequests: { pageInfo: { hasNextPage: s + v.first < list.length, endCursor: String(s + v.first) }, nodes: list.slice(s, s + v.first) } } } });
     }
     return new Response('nf', { status: 404 });
   }) as typeof fetch;
