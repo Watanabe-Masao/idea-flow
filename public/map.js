@@ -1,4 +1,4 @@
-// 地図（「決まり」タブの「地図」）。機能の一覧（カタログ）と、マージした PR・Issue から自動で作る。
+// 機能の画面（下のタブの「機能」）。機能の一覧（カタログ）と、マージした PR・Issue から自動で作る。
 // 機能ごとの稼働（なぞるとその日の作業）・状態・使うデータ・関係する Issue、データの流れの図。
 (() => {
 const IF = window.IF, { api, esc } = IF;
@@ -7,7 +7,12 @@ css.textContent = `
 .wm{--h1:light-dark(#9fe3bb,#1d5e3b);--h2:light-dark(#2fae69,#2fae69);--h3:light-dark(#0c5a35,#9ff2c2);--warn:light-dark(#9a5b00,#f2b75a);--warnbg:light-dark(#fff3dc,#3a2a10);--red2:light-dark(#b42318,#ff8a80)}
 .wm-sum{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
 .wm-sum div{background:var(--soft);border-radius:12px;padding:8px 12px}.wm-sum b{display:block;font-size:24px;line-height:1.2;font-variant-numeric:tabular-nums}.wm-sum span{font-size:12.5px;color:var(--mute)}
-.wm-sum .hot{background:#b8f5d0;color:#0c3b24}.wm-sum .hot span{color:#0c3b24}
+.wm-sum .warn{background:var(--warnbg)}.wm-sum .warn b{color:var(--warn)}.wm-sum .bad b{color:var(--red2)}
+.wm-li{display:flex;align-items:center;gap:10px;min-height:42px;padding:4px 6px;border-top:1px solid var(--line);cursor:pointer;font-size:15px;line-height:1.3}.wm-li:active,.wm-li:hover{background:var(--soft)}
+.wm-li .wm-nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.wm-li .n{font-size:12.5px;color:var(--mute);white-space:nowrap;font-variant-numeric:tabular-nums}.wm-li .n.o{color:var(--ink);font-weight:600}
+.wm-dot{flex:none;width:10px;height:10px;border-radius:50%}.wm-d0{background:#1f9e5a}.wm-d1{background:#8fd4ac}.wm-d2{background:var(--warn)}
+details.wm-hp>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:6px}details.wm-hp>summary::-webkit-details-marker{display:none}details.wm-hp>summary h3{margin-bottom:2px}details.wm-hp>summary .q{flex:none;width:22px;height:22px;border-radius:50%;border:1px solid var(--line);font-size:12px;color:var(--mute);display:inline-grid;place-items:center;margin-top:20px}details.wm-hp[open]>summary .q{background:var(--ink);color:var(--bg)}
+details.wm-more{margin-top:14px;border-top:1px solid var(--line)}details.wm-more>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-size:15px;font-weight:600}details.wm-more>summary small{display:inline;margin-left:8px}
 .wm-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 .wm-chip{font:inherit;font-size:13px;min-height:38px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}.wm-chip[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .wm-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12.5px;color:var(--mute);margin-top:8px}.wm-sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
@@ -25,7 +30,7 @@ css.textContent = `
 .wm-det h4{margin:10px 0 2px;font-size:13px;color:var(--ink)}.wm-det ul{margin:0;padding-left:1.2em}.wm-det li{margin:2px 0}
 .wm-iss{border-top:1px solid var(--line);padding:9px 0;font-size:14px}.wm-iss a{font-weight:600;text-decoration:none}.wm-iss a:hover{text-decoration:underline}.wm-iss .m{font-size:12.5px;color:var(--mute)}
 .wm-stale{color:var(--warn);background:var(--warnbg);font-size:11.5px;padding:1px 8px;border-radius:999px;margin-left:6px;white-space:nowrap}
-.wm-bar{position:fixed;left:8px;right:8px;bottom:max(10px,env(safe-area-inset-bottom));max-width:640px;margin:0 auto;background:var(--ink);color:var(--bg);border-radius:12px;padding:10px 14px;font-size:14px;line-height:1.5;z-index:20;max-height:42vh;overflow:auto}
+.wm-bar{position:fixed;left:8px;right:8px;bottom:calc(70px + env(safe-area-inset-bottom));max-width:640px;margin:0 auto;background:var(--ink);color:var(--bg);border-radius:12px;padding:10px 14px;font-size:14px;line-height:1.5;z-index:20;max-height:42vh;overflow:auto}
 .wm-bar ul{margin:4px 0 0;padding-left:1.1em}.wm-bar a{color:inherit}.wm-bar .x{float:right;background:none;border:0;color:inherit;font:inherit;font-size:18px;min-width:44px;min-height:32px;cursor:pointer}
 .wm-tl{display:grid;grid-template-columns:9.5em minmax(0,1fr);gap:8px;align-items:center;padding:5px 4px;border-radius:10px;border:1px solid transparent;cursor:pointer}
 .wm-tl.on{border-color:var(--ink);border-radius:10px 10px 0 0}.wm-tl .nm{font-size:13px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -66,7 +71,8 @@ async function sync(r) {
     for (let k = 0; k < 8 && !busy && !done; k++) { const x = await call({ mode: 'backfill', pages: 4 }); if (x.busy) { busy = true; break; } back += x.backfilled; done = x.backfillDone; s.note = `さかのぼり ${back}件…`; draw(); }
     await load(r);
     s.note = busy ? 'ほかの読み込み（コネクタなど）の途中だったので、保存済みの地図を出しています。少し待ってから読み直してください。'
-      : `最近の更新 ${up}件${caught ? '' : '（続きあり）'}・${full ? `Issue ${iss}件（全部読み直し）` : `動いた Issue ${iss}件`}${back ? `・さかのぼり ${back}件` : ''}を確かめました。（計測：GitHub に ${calls}回・${(ms / 1000).toFixed(1)}秒／地図の計算 ${s.data?.took ?? '—'}ms・${s.kb ?? '—'}KB）`;
+      : `最近の更新 ${up}件${caught ? '' : '（続きあり）'}・${full ? `Issue ${iss}件（全部読み直し）` : `動いた Issue ${iss}件`}${back ? `・さかのぼり ${back}件` : ''}を確かめました。`;
+    s.meas = `計測：GitHub に ${calls}回・${(ms / 1000).toFixed(1)}秒／地図の計算 ${s.data?.took ?? '—'}ms・${s.kb ?? '—'}KB`;
   } catch (e) { s.note = '読めませんでした：' + e.message; }
   s.busy = false; s.synced = true; draw();
 }
@@ -81,19 +87,11 @@ function iline(d, i) {
 function writing(w) {
   if (!w || (!w.prs && !w.issues)) return '';
   const bar = (k, n, l) => { const p = n ? Math.round(k / n * 100) : 0; return `<div style="display:grid;grid-template-columns:11em minmax(0,1fr) 4.5em;gap:8px;align-items:center;font-size:13px;margin-top:4px"><span>${l}</span><span style="height:8px;border-radius:4px;background:var(--line);overflow:hidden"><i style="display:block;height:100%;width:${p}%;background:${p >= 80 ? '#2fae69' : p >= 50 ? '#c98500' : 'var(--red2)'}"></i></span><span style="text-align:right;font-variant-numeric:tabular-nums">${n ? `${k}/${n}` : '—'}</span></div>`; };
-  return `<h3>書き方の守り具合</h3><p class="sub">この期間の PR ${w.prs}件・立てた Issue ${w.issues}件。書き方がそろうほど、地図のつながりが確かになります。</p>
+  return `<p class="sub">この期間の PR ${w.prs}件・立てた Issue ${w.issues}件。書き方がそろうほど、地図のつながりが確かになります。</p>
   ${bar(w.prTitle, w.prs, 'PR：題の頭に機能名')}${bar(w.prLinked, w.prs, 'PR：Issue の番号')}${bar(w.prReport, w.prs, 'PR：申告の3つの見出し')}${bar(w.issueFeature, w.issues, 'Issue：「機能：」')}${bar(w.issueClose, w.issues, 'Issue：「閉じる条件：」')}
   ${w.misses.length ? `<details style="margin-top:6px"><summary class="sub">足りないもの（新しい${w.misses.length}件）</summary><ul style="font-size:13px;padding-left:1.2em">${w.misses.map(m => `<li><a href="${GH(REPO)}/${m.type === 'pr' ? 'pull' : 'issues'}/${m.n}" target="_blank" rel="noopener">${m.type === 'pr' ? 'PR' : 'Issue'} #${m.n}</a> ${esc(m.t)}<br><span class="sub">足りない：${esc(m.miss.join('・'))}</span></li>`).join('')}</ul></details>` : ''}`;
 }
 
-// Claude の申告（PR の説明の3つの見出し）。無ければ出さない
-const report = r => !r ? '' : `<div style="font-size:13px;margin:2px 0 4px;padding:6px 8px;border-radius:8px;background:var(--soft)">${[['確かめた決まり', r.read], ['自分で判断した所', r.own], ['足りなかった決まり', r.lack]].map(([h, xs]) => `<div><b>${h}</b>：${xs.length ? xs.map(esc).join('／') : 'なし'}</div>`).join('')}</div>`;
-function detail(d, f) {
-  const iss = d.issues.filter(i => i.features.includes(f.id));
-  return `<div class="row" style="margin:0 0 6px"><button class="btn s" data-fpage="${esc(f.id)}">機能のページ</button></div><div style="color:var(--ink)">${esc(f.desc)}</div><div style="margin-top:4px">入口：${esc(f.group)}　データ：${esc(f.data.map(k => d.nodes[k]?.name || k).join('、') || 'なし')}</div>
-  <h4>最近の作業</h4><ul>${f.recent.map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.n}</a> ${md(p.day)} ${esc(p.t)}${report(p.report)}</li>`).join('') || '<li>なし</li>'}</ul>
-  <h4>関係する Issue</h4>${iss.length ? iss.map(i => iline(d, i)).join('') : '<div>なし</div>'}`;
-}
 function flow(d, s) {
   const nk = Object.keys(d.nodes), fs = d.features, W = Math.max(320, (EL.clientWidth || 360) - 8), rh = 26, H = Math.max(nk.length, fs.length) * rh + 30;
   const lw = Math.min(170, W * 0.44), rx = W - Math.min(170, W * 0.44), ny = k => 20 + nk.indexOf(k) * (H - 30) / nk.length, fy = i => 20 + i * (H - 30) / fs.length;
@@ -280,13 +278,18 @@ function clusterView(d, s) {
 
 // プロジェクト（#77）：番号（100万以上）を「名前#番号」に戻して出す。数としての番号（data-…）はそのまま
 const relabelHtml = (h, names) => names && names.length > 1 ? h.replace(/#(\d{7,})\b/g, (_m, n) => `${names[Math.floor(n / 1e6) - 1] || '?'}#${n % 1e6}`) : h;
+// 見出しと、押すと開く説明（説明文は「？」の中。結論を先に見せる）
+const hd = (title, text) => `<details class="wm-hp"><summary><h3>${title}</h3><span class="q" aria-label="説明">？</span></summary><p class="sub">${text}</p></details>`;
+const more = (title, note, body) => `<details class="wm-more"><summary>${title}${note ? `<small class="sub">${note}</small>` : ''}</summary>${body}</details>`;
 function draw() {
   if (!EL) return;
   const s = st(REPO), d = s.data;
-  const top = `<div class="row" style="margin-top:0"><button class="btn" id="wmsync" ${s.busy ? 'disabled' : ''}>${s.busy ? '読んでいます…' : 'GitHub から読み直す'}</button>
-    ${s.view === 'feat' ? `<div class="seg" role="group" aria-label="期間">${[[21, '3週間'], [60, '2か月']].map(([v, l]) => `<button data-span="${v}" aria-pressed="${s.span === v}">${l}</button>`).join('')}</div>` : ''}</div>
-    <div class="seg" role="group" aria-label="見かた" style="margin:8px 0 0;margin-left:0">${[['feat', '機能'], ['cluster', (EL.clientWidth || 400) < 640 ? '関連する作業' : 'クラスター'], ['issue', 'Issue の経過']].map(([v, l]) => `<button data-view="${v}" aria-pressed="${s.view === v}">${l}</button>`).join('')}</div>
-    ${s.note ? `<p class="sub" style="margin-top:6px">${esc(s.note)}</p>` : ''}`;
+  // 機能の一覧では読み直しと期間。ほかの画面では一覧に戻るボタン（見方の切り替えは置かない。#71）
+  const own = (s.view === 'lineage' || s.view === 'fpage') && s.linBack;
+  const top = s.view === 'feat' ? `<div class="row" style="margin-top:0"><button class="btn" id="wmsync" ${s.busy ? 'disabled' : ''}>${s.busy ? '読んでいます…' : 'GitHub から読み直す'}</button>
+    <div class="seg" role="group" aria-label="期間">${[[21, '3週間'], [60, '2か月']].map(([v, l]) => `<button data-span="${v}" aria-pressed="${s.span === v}">${l}</button>`).join('')}</div></div>
+    ${s.note ? `<p class="sub" style="margin-top:6px">${esc(s.note)}</p>` : ''}`
+    : own ? '' : `<div class="row" style="margin-top:0"><button class="btn" data-view="feat">‹ 機能の一覧</button></div>`;
   if (!d) { EL.innerHTML = relabelHtml(`<div class="wm">${top}<p class="sub" style="margin-top:8px">読み込み中…</p></div>`, d && d.names); return; }
   if (!d.catalog) { EL.innerHTML = relabelHtml(`<div class="wm">${top}<p class="sub" style="margin-top:8px">このリポジトリには、まだ機能の一覧（カタログ）がありません。<code>src/catalogs.ts</code> に足すと、地図が作られます。</p></div>`, d && d.names); return; }
   if (s.view === 'cluster') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${clusterView(d, s)}</div>`, d && d.names); sheet(s._sheet); return; }
@@ -294,36 +297,35 @@ function draw() {
   if (s.view === 'issue') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${issueView(d, s)}</div>`, d && d.names); return; }
   if (s.view === 'fpage') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${window.Lineage.feature(d, s.feat, { back: s.linBack && s.linBack.name })}</div>`, d && d.names); return; }
   if (s.view === 'lineage') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${window.Lineage.render(d, s.lin, { cand: s.cand, back: s.linBack && s.linBack.name })}</div>`, d && d.names); return; }
-  const c = d.counts, n = d.days.length, step = n > 30 ? 14 : 7;
-  let rows = '', g = '';
+  const c = d.counts, n = d.days.length, step = n > 30 ? 14 : 7, byState = [0, 1, 2].map(k => d.features.filter(f => f.state === k).length);
+  // 機能の一覧：1行に、状態の点・名前・開いている Issue の数だけ。押すと機能のページ（#71）
+  let rows = '', strips = '', g = '';
   for (const f of d.features) {
     if (s.filt >= 0 && f.state !== s.filt) continue;
     if (f.group !== g) { g = f.group; rows += `<div class="wm-gh">${esc(g)}</div>`; }
-    const on = s.sel === f.id, dim = s.node && !f.data.includes(s.node), open = d.issues.filter(i => i.open && i.features.includes(f.id)).length;
-    rows += `<div class="wm-row${on ? ' on' : ''}${dim ? ' dim' : ''}" data-f="${esc(f.id)}" tabindex="0" role="button" aria-expanded="${on}"><div class="wm-nm">${esc(f.name)}<small class="wm-s${f.state}">${ST[f.state]}・最後 ${md(f.last) || 'なし'}・${f.span}件${open ? `・Issue ${open}` : ''}</small></div>
-      <div class="wm-strip wm-scr" data-f="${esc(f.id)}" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${f.days.map(v => `<i style="background:${lv(v)}"></i>`).join('')}</div></div>${on ? `<div class="wm-det">${detail(d, f)}</div>` : ''}`;
+    const open = d.issues.filter(i => i.open && i.features.includes(f.id)).length;
+    rows += `<div class="wm-li" data-fpage="${esc(f.id)}" tabindex="0" role="button" aria-label="${esc(f.name)}・${ST[f.state]}・開いている Issue ${open}"><i class="wm-dot wm-d${f.state}"></i><span class="wm-nm">${esc(f.name)}</span><span class="n${open ? ' o' : ''}">${open ? `Issue ${open}` : '—'}</span></div>`;
+    strips += `<div class="wm-row" style="cursor:default"><div class="wm-nm" style="font-size:13px">${esc(f.name.replace(/（.*）/, ''))}</div><div class="wm-strip wm-scr" data-f="${esc(f.id)}" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${f.days.map(v => `<i style="background:${lv(v)}"></i>`).join('')}</div></div>`;
   }
   const open = d.issues.filter(i => i.open), closed = d.issues.filter(i => !i.open);
   const nodeNote = s.node ? `<div class="card" style="margin-top:8px"><b>${esc(d.nodes[s.node].name)}</b><div class="sub">${esc(d.nodes[s.node].note)}。使っている機能：${esc(d.features.filter(f => f.data.includes(s.node)).map(f => f.name).join('、') || 'なし')}</div>${d.issues.filter(i => i.nodes.includes(s.node)).map(i => iline(d, i)).join('')}</div>` : '';
+  const card = (v, l, cls) => `<div class="${v ? cls : ''}"><b>${v}</b><span>${l}</span></div>`;
   EL.innerHTML = relabelHtml(`<div class="wm">${top}
-  <p class="sub" style="margin-top:8px">機能の一覧と、マージした PR（変えたファイル）・Issue から自動で作ります。読むだけで、リポジトリには書きません。今日（${md(d.today)}）までの${n}日。</p>
-  <div class="wm-sum"><div class="hot"><b>${c.stopped}</b><span>直近7日マージなしの機能</span></div><div><b>${c.building}／${c.settled}</b><span>直近4日に3件以上マージ／直近7日にマージあり</span></div>
-  <div><b>${c.openIssues}</b><span>開いている Issue（うち古い候補 ${c.stale}）</span></div><div><b style="color:var(--red2)">${c.unused}</b><span>貯めているが画面なし</span></div></div>
-  ${writing(d.writing)}
-  <h3>機能ごとの稼働</h3><p class="sub">1マス＝1日（マージした PR の数）。マスを指でなぞると、その日の作業が下に出ます。名前を押すと中身が開きます。</p>
-  <div class="wm-legend"><span><span class="wm-sw" style="background:var(--line)"></span>0</span><span><span class="wm-sw" style="background:var(--h1)"></span>1</span><span><span class="wm-sw" style="background:var(--h2)"></span>2〜3</span><span><span class="wm-sw" style="background:var(--h3)"></span>4 以上</span></div>
-  <div class="wm-chips">${[['すべて', -1], ...ST.map((l, i) => [l, i])].map(([l, i]) => `<button class="wm-chip" data-filt="${i}" aria-pressed="${s.filt === i}">${l}</button>`).join('')}</div>
-  <div class="wm-board"><div class="wm-days"><span></span><div class="wm-strip" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${d.days.map((x, k) => `<i class="l">${(n - 1 - k) % step === 0 ? md(x) : ''}</i>`).join('')}</div></div>
-  <div id="wmrows">${rows}</div></div>
-  <p class="sub" style="margin-top:8px">状態は、その機能のファイルを変えた PR のマージの数から：直近4日に3件以上／直近7日にマージあり／直近7日マージなし。</p>
-  <h3>開いている Issue と、つながる機能</h3><p class="sub">関係する機能がすべて直近7日マージなしで、Issue も7日以上動いていないものに「古くなっている候補」を付けます。閉じるかを決めるのは人です。</p>
+  <div class="wm-sum">${card(c.stopped, '直近7日マージなしの機能', 'warn')}${card(c.openIssues, '開いている Issue', '')}${card(c.stale, '古くなっている候補', 'warn')}${card(c.unused, '貯めているが画面なし', 'bad')}</div>
+  ${hd('機能', `機能の一覧（カタログ）と、マージした PR（変えたファイル）・Issue から自動で作ります。読むだけで、リポジトリには書きません。点の色（下の札が凡例をかねる）は、その機能のファイルを変えた PR のマージの数から（今日 ${md(d.today)} までの${n}日）。押すと機能のページ。`)}
+  <div class="wm-chips">${[['すべて', -1, d.features.length], ...ST.map((l, i) => [l, i, byState[i]])].map(([l, i, k]) => `<button class="wm-chip" data-filt="${i}" aria-pressed="${s.filt === i}">${i >= 0 ? `<i class="wm-dot wm-d${i}" style="display:inline-block;margin-right:5px;vertical-align:0"></i>` : ''}${l} ${k}</button>`).join('')}</div>
+  <div id="wmrows" style="margin-top:6px">${rows}</div>
+  ${hd(`開いている Issue ${open.length}`, '関係する機能がすべて直近7日マージなしで、Issue も7日以上動いていないものに「古くなっている候補」を付けます。閉じるかを決めるのは人です。')}
   ${[...open].sort((a, b) => b.stale - a.stale).map(i => iline(d, i)).join('') || '<p class="sub">なし</p>'}
   <details style="margin-top:8px"><summary class="sub">閉じた Issue ${closed.length} 件</summary>${closed.map(i => iline(d, i)).join('')}</details>
-  <h3>どの機能にも当たらない作業</h3><p class="sub">この期間に、一覧のどの機能のファイルにも当たらなかった PR。増えてきたら、一覧に機能を足すかを決めます。</p>
-  ${d.unmatched.length ? `<ul style="font-size:14px;padding-left:1.2em">${d.unmatched.slice(0, 30).map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.n}</a> ${md(p.day)} ${esc(p.t)}</li>`).join('')}</ul>` : '<p class="sub">なし</p>'}
-  <h3>データの流れ</h3><p class="sub">左はデータ、右は機能。赤い破線は、貯めているのにどの画面も使っていないデータ。押すと、つながる先が光ります。</p>
-  ${nodeNote}<div class="fig" style="margin-top:8px">${flow(d, s)}</div>
-  <p class="sub" style="margin-top:8px">取り込み：Issue ${d.issues.length}件${d.sync?.issues_more ? '（1000件で止めた。続きあり）' : '（すべて）'}・PR ${d.sync?.pr_done ? 'すべて' : '途中まで'}・最後に読んだ ${d.sync?.prs_at ? md(d.sync.prs_at.slice(0, 10)) + ' ' + d.sync.prs_at.slice(11, 16) + '（UTC）' : 'まだ'}</p></div>`, d && d.names);
+  <div class="row" style="margin-top:14px"><span class="sub">ほかの見方：</span><button class="btn s" data-view="cluster">関連する作業</button><button class="btn s" data-view="issue">Issue の経過</button></div>
+  ${more('どの機能にも当たらない作業', `${d.unmatched.length}件`, `<p class="sub">この期間に、一覧のどの機能のファイルにも当たらなかった PR。増えてきたら、一覧に機能を足すかを決めます。</p>${d.unmatched.length ? `<ul style="font-size:14px;padding-left:1.2em">${d.unmatched.slice(0, 30).map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.n}</a> ${md(p.day)} ${esc(p.t)}</li>`).join('')}</ul>` : ''}`)}
+  ${more('機能ごとの稼働（日ごと）', '', `<p class="sub">1マス＝1日（マージした PR の数）。マスを指でなぞると、その日の作業が下に出ます。</p>
+  <div class="wm-legend"><span><span class="wm-sw" style="background:var(--line)"></span>0</span><span><span class="wm-sw" style="background:var(--h1)"></span>1</span><span><span class="wm-sw" style="background:var(--h2)"></span>2〜3</span><span><span class="wm-sw" style="background:var(--h3)"></span>4 以上</span></div>
+  <div class="wm-board"><div class="wm-days"><span></span><div class="wm-strip" style="grid-template-columns:repeat(${n},minmax(0,1fr))">${d.days.map((x, k) => `<i class="l">${(n - 1 - k) % step === 0 ? md(x) : ''}</i>`).join('')}</div></div>${strips}</div>`)}
+  ${d.writing && (d.writing.prs || d.writing.issues) ? more('書き方の守り具合', '', writing(d.writing)) : ''}
+  ${more('データの流れ', c.unused ? `画面なし ${c.unused}` : '', `<p class="sub">左はデータ、右は機能。赤い破線は、貯めているのにどの画面も使っていないデータ。押すと、つながる先が光ります。</p>${nodeNote}<div class="fig" style="margin-top:8px">${flow(d, s)}</div>`)}
+  ${more('取り込みの記録', '', `<p class="sub">Issue ${d.issues.length}件${d.sync?.issues_more ? '（1000件で止めた。続きあり）' : '（すべて）'}・PR ${d.sync?.pr_done ? 'すべて' : '途中まで'}・最後に読んだ ${d.sync?.prs_at ? md(d.sync.prs_at.slice(0, 10)) + ' ' + d.sync.prs_at.slice(11, 16) + '（UTC）' : 'まだ'}${s.meas ? `<br>${esc(s.meas)}` : ''}</p>`)}</div>`, d && d.names);
 }
 
 // スマホでは、選んだものの根拠を画面の下から出す（下までスクロールしなくてよい）
@@ -375,12 +377,11 @@ function bind(el) {
     const tl = t.closest('.wm-tl'); if (tl && !t.closest('a')) { s.isel = s.isel === +tl.dataset.i ? null : +tl.dataset.i; draw(); return; }
     const fl = t.closest('[data-filt]'); if (fl) { s.filt = +fl.dataset.filt; draw(); return; }
     if (t.closest('.wm-scr') || t.closest('a')) return;
-    const r = t.closest('.wm-row'); if (r) { hideDay(); s.sel = s.sel === r.dataset.f ? null : r.dataset.f; s.node = null; draw(); return; }
     const g = t.closest('[data-node],[data-feat]');
     if (g) { if (g.dataset.node) { s.node = s.node === g.dataset.node ? null : g.dataset.node; s.sel = null; draw(); }
-      else { s.sel = g.dataset.feat; s.node = null; draw(); EL.querySelector(`.wm-row[data-f="${CSS.escape(s.sel)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); } }
+      else openFeature(g.dataset.feat, true); }
   });
-  el.addEventListener('keydown', e => { if (e.target.id === 'wmq' && e.key === 'Enter') { e.preventDefault(); const st0 = st(REPO); st0.q = e.target.value; draw(); return; } const r = e.target.closest('.wm-row') || e.target.closest('.wm-tl') || e.target.closest('.wm-cn'); if (r && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); r.click(); } });
+  el.addEventListener('keydown', e => { if (e.target.id === 'wmq' && e.key === 'Enter') { e.preventDefault(); const st0 = st(REPO); st0.q = e.target.value; draw(); return; } const r = e.target.closest('.wm-li') || e.target.closest('.wm-tl') || e.target.closest('.wm-cn'); if (r && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); r.click(); } });
 }
 
 // 系譜の画面（#70）：住所は #repo=…&lineage=n。開いた所に戻れるよう、元の見方を覚える
@@ -405,5 +406,6 @@ async function render(el, repo) {
   // 開いたときに一度だけ、静かに新しい PR と Issue を読む
   if (!s.synced && s.data?.catalog) sync(repo);
 }
-window.WorkMap = { render };
+function home() { const s = st(REPO); s.view = 'feat'; s.from = null; s.linBack = null; s.lin = null; setHash(null); hideDay(); draw(); window.scrollTo(0, 0); }
+window.WorkMap = { render, home };
 })();

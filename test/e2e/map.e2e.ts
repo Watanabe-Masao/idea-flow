@@ -1,4 +1,4 @@
-// 画面のテスト：地図の3つの見方を、スマホの幅と PC の幅で開き、ページのエラーが出ないことと、主な流れを確かめる（#47）。
+// 画面のテスト：下の3つのタブ（今日・機能・決まり）と、機能のほかの見方を、スマホの幅と PC の幅で開き、ページのエラーが出ないことと、主な流れを確かめる（#47）。
 // WebKit は iPhone の Safari・Chrome と同じ中身。E2E_BROWSERS で選ぶ（既定 chromium,webkit）。入っていないものは飛ばす
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,8 +44,8 @@ for (const k of kinds) {
     assert.match(await text(pg, '.wm-pick'), /#53/);
     assert.equal(await pg.locator('[data-ifilt]').count(), 0, '1つの Issue を中心にしている間は絞り込みを出さない');
     await pg.click('[data-back]');
-    assert.equal(await pg.locator('[data-view="cluster"]').getAttribute('aria-pressed'), 'true');
-    assert.equal(await pg.locator('[data-cn="i53"]').count(), 1);
+    assert.equal(await pg.locator('[data-cn="i53"]').count(), 1, '関連する作業に戻る');
+    await pg.click('[data-view="feat"]');
     await pg.click('[data-view="issue"]');
     assert.match(await pg.content(), /出している範囲/);
     assert.deepEqual(errs, []);
@@ -137,8 +137,9 @@ for (const k of kinds) {
     await pg.reload({ waitUntil: 'load' });
     if (!(await pg.locator('.ln-node.here').first().waitFor({ timeout: 15000 }).then(() => true, () => false))) { console.log(`E2E_RETRY ${k} 系譜の開き直し`); await pg.reload({ waitUntil: 'load' }); await pg.waitForSelector('.ln-node.here', { timeout: 30000 }); }
     assert.match(await pg.locator('.ln-node.here .ln-t').innerText(), /^#53 /);
-    // 戻る（開き直したあとは戻り先が無いので、見方のタブで）
-    await pg.click('[data-view="cluster"]');
+    // 戻る（開き直したあとは戻り先が無いので、下のタブの「機能」をもう一度押して一覧へ）
+    await pg.click('[data-rsub="map"]');
+    await pg.waitForSelector('.wm-li');
     assert.doesNotMatch(pg.url(), /lineage=/);
     assert.deepEqual(errs, []);
     await pg.close();
@@ -146,8 +147,7 @@ for (const k of kinds) {
 
   test(`${k}・機能のページ（#70）：機能の一覧から開き、系譜へ進んで、機能のページに戻れる`, async () => {
     const { pg, errs } = await open(b!, 390);
-    await pg.locator('.wm-row .wm-nm').first().click();
-    await pg.locator('[data-fpage]').first().click();
+    await pg.locator('.wm-li').first().click();
     await pg.waitForSelector('.fp-strip');
     assert.match(await pg.innerText('.wm'), /この機能を通る系譜/);
     assert.match(pg.url(), /&feature=/);
@@ -161,11 +161,25 @@ for (const k of kinds) {
     await pg.close();
   });
 
+  test(`${k}・スマホ：下に「今日・機能・決まり」の3つのタブだけ。見方の切り替えは無く、機能の一覧は1行が低い（#71）`, async () => {
+    const { pg, errs } = await open(b!, 390);
+    assert.deepEqual((await pg.locator('.bnav [data-rsub]').allInnerTexts()).map(x => x.trim()), ['今日', '機能', '決まり']);
+    assert.equal(await pg.locator('.tabs [data-rsub]').count(), 0, '上のタブは無い');
+    assert.equal(await pg.locator('[aria-label="見かた"]').count(), 0, '見方の切り替えは無い');
+    const h = await pg.locator('.wm-li').evaluateAll(es => es.map(e => e.getBoundingClientRect().height));
+    assert.ok(h.length > 0 && Math.max(...h) <= 46, `1行の高さ ${h.join(',')}（前は平均75px）`);
+    const nav = await pg.locator('.bnav').boundingBox();
+    assert.ok(nav && Math.round(nav.y + nav.height) === 844, '下に固定');
+    assert.deepEqual(errs, []);
+    await pg.close();
+  });
+
   test(`${k}・PC：3つの見方を開いてもエラーが出ない`, async () => {
     const { pg, errs } = await open(b!, 1100);
     await pg.click('[data-view="cluster"]');
     assert.ok(await pg.locator('.wm-chip').count() > 0, 'PC では入り口を札で並べる');
     await pg.locator('.wm-chip').first().click();
+    await pg.click('[data-view="feat"]');
     await pg.click('[data-view="issue"]');
     await pg.click('[data-ifilt="closed"]');
     await pg.click('[data-view="feat"]');

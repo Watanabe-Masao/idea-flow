@@ -1,10 +1,12 @@
 <!DOCTYPE html>
-<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>idea-flow</title>
 <style>
 :root{color-scheme:light dark;--bg:light-dark(#d5dbe0,#16191c);--panel:light-dark(#fff,#1f2327);--ink:light-dark(#0d0f11,#eef1f3);--mute:light-dark(#5b646c,#97a1aa);--line:light-dark(#b7c0c7,#353b41);--red:#e8251a;--soft:light-dark(#eef1f3,#262b30)}
 *{box-sizing:border-box;min-width:0}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Hiragino Sans","Noto Sans JP",system-ui,sans-serif;overflow-x:clip}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Hiragino Sans","Noto Sans JP",system-ui,sans-serif;overflow-x:clip;padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+.bnav{position:fixed;left:0;right:0;bottom:0;z-index:30;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--panel);border-top:1px solid var(--line);padding:0 max(env(safe-area-inset-left),4px) env(safe-area-inset-bottom) max(env(safe-area-inset-right),4px)}
+.bnav button{font:inherit;font-size:15px;min-height:56px;border:0;background:transparent;color:var(--mute);cursor:pointer;border-top:3px solid transparent}.bnav button[aria-selected=true]{color:var(--ink);font-weight:700;border-top-color:var(--ink)}
 .wrap{max-width:1000px;margin:0 auto;padding:clamp(16px,3vw,32px) max(4vw,12px)}
 h1{font-size:clamp(24px,4vw,34px);line-height:1.1;margin:0 0 4px}
 .sub{color:var(--mute);font-size:14px;margin:0}
@@ -86,10 +88,10 @@ function rulesView(){const el=$('#rules');if(!RV){el.innerHTML='<p class="sub">�
  const repos=[...new Set([...CATS.map(c=>c.repo),...RV.sources.map(s=>s.repo),...RV.docs.map(d=>d.repo)])].filter(x=>!inProj.has(x));
  if(!RREPO||!repos.includes(RREPO))RREPO=repos.find(x=>RV.docs.some(d=>d.repo===x))||repos[0]||'';
  const head=`<div class="row" style="margin:0">${repos.length>1?`<select id="rrepo" style="flex:1 1 200px" aria-label="リポジトリ">${repos.map(x=>`<option value="${esc(x)}" ${x===RREPO?'selected':''}>${esc((c=>c&&c.repos.length>1?c.repos.map(r=>r.split('/')[1]).join(' ＋ '):x)(CATS.find(c=>c.repo===x)))}</option>`).join('')}</select>`:`<b>${esc(RREPO||'リポジトリはまだありません')}</b>`}</div>
- <div class="tabs" role="tablist" style="margin-top:8px">${[['today','今日'],['map','地図'],['docs','文書']].map(([k,l])=>`<button class="tab" role="tab" data-rsub="${k}" aria-selected="${RSUB===k}">${l}</button>`).join('')}</div>`;
+ <nav class="bnav" role="tablist" aria-label="画面">${[['today','今日'],['map','機能'],['docs','決まり']].map(([k,l])=>`<button role="tab" data-rsub="${k}" aria-selected="${RSUB===k}">${l}</button>`).join('')}</nav>`;
  if(RSUB==='today'&&RREPO){el.innerHTML=head+'<div id="rtoday" style="margin-top:10px"></div>';window.Today.render($('#rtoday'),RREPO);return}
  if(RSUB==='map'&&RREPO){el.innerHTML=head+'<div id="rmap" style="margin-top:10px"></div>';window.WorkMap.render($('#rmap'),RREPO);return}
- el.innerHTML=head+`<h2 style="margin-top:12px">文書</h2><p class="sub">リポジトリの決まりの文書（CLAUDE.md・スキル・docs など）の一覧と、Claude への届き方、気になる所（重複・食い違い・古い決まり・どこからも読まれない文書）。読むだけで、GitHub には書き込みません。</p>
+ el.innerHTML=head+`<h2 style="margin-top:12px">決まり</h2><p class="sub">リポジトリの決まりの文書（CLAUDE.md・スキル・docs など）の一覧と、Claude への届き方、気になる所（重複・食い違い・古い決まり・どこからも読まれない文書）。読むだけで、GitHub には書き込みません。</p>
  ${RV.stale?`<div style="border:1px solid var(--red);border-radius:10px;padding:10px 12px;margin-top:10px"><b>診断の仕方が新しくなりました</b><p class="sub" style="margin:4px 0">下の結果は古い仕方のままです。取り込み直すと新しい診断になります。</p><div class="row">${[...new Set(RV.docs.map(d=>d.repo))].map(r=>`<button class="btn s p" data-rsync="${esc(r)}">${esc(r.split('/')[1])} を取り込み直す</button>`).join('')}</div></div>`:''}
  ${repos.filter(x=>x===RREPO||!RREPO).map(r=>{const s=RV.sources.find(x=>x.repo===r),ds=RV.docs.filter(d=>d.repo===r),dg=RV.diagnosis[r]||{conclusions:[],external:[]};const key=r.replace(/[^\w]/g,'_');
   return`<div class="card" style="margin-top:14px;padding:12px"><div class="row" style="margin:0;justify-content:space-between"><b>${esc(r)}</b><span class="sub">${s&&s.synced_at?esc(s.synced_at.slice(0,10)):'未取り込み'}</span></div>
@@ -111,7 +113,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  try{
  if(b.id==='saveTok'){TOK=$('#tok').value.trim();try{localStorage.setItem('idea-flow-token',TOK)}catch(_){}await load();return}
  if(b.dataset.rback){RDOC=null;rulesView();return}
- if(b.dataset.rsub){RSUB=b.dataset.rsub;rulesView();return}
+ if(b.dataset.rsub){const k=b.dataset.rsub;if(k==='map'&&RSUB==='map'&&window.WorkMap.home){window.WorkMap.home();return}if(k!=='map'&&/lineage=|feature=/.test(location.hash)){try{history.replaceState(null,'',location.pathname+location.search)}catch(_){}}RSUB=k;rulesView();window.scrollTo(0,0);return}
  if(b.dataset.ropen){const k=b.dataset.ropen;ROPEN.has(k)?ROPEN.delete(k):ROPEN.add(k);rulesView();return}
  if(b.dataset.rext){const [repo,...pp]=b.dataset.rext.split('|');b.disabled=true;await api('/api/rules/external',{method:'POST',body:JSON.stringify({repo,path:pp.join('|'),external:b.dataset.v2==='1'})});await loadRules();say('変えました（次の取り込みからも効きます）');return}
  if(b.dataset.rfiles){await pickFiles(b.dataset.rfiles);return}
