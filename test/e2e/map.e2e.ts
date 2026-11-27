@@ -123,6 +123,25 @@ for (const k of kinds) {
     await pg.close();
   });
 
+  test(`${k}・系譜（#70）：Issue から系譜を開き、住所で開き直しても同じ所に着き、戻れる`, async () => {
+    const { pg, errs } = await open(b!, 390);
+    await pg.click('[data-view="cluster"]');
+    await pg.click('[data-pick="1"]'); await pg.fill('#wmq', '53'); await pg.press('#wmq', 'Enter'); await pg.click('[data-jump]');
+    await pg.click('[data-lin="53"]');
+    await pg.waitForSelector('.ln-node.here');
+    assert.match(await pg.innerText('.wm'), /引き継ぎの系譜/);
+    assert.match(await pg.locator('.ln-node.here .ln-t').innerText(), /^#53 /);
+    assert.match(pg.url(), /#repo=Watanabe-Masao%2Fidea-flow&lineage=53$/);
+    // 住所で開き直す
+    await pg.reload(); await pg.waitForSelector('.ln-node.here', { timeout: 30000 });
+    assert.match(await pg.locator('.ln-node.here .ln-t').innerText(), /^#53 /);
+    // 戻る（開き直したあとは戻り先が無いので、見方のタブで）
+    await pg.click('[data-view="cluster"]');
+    assert.doesNotMatch(pg.url(), /lineage=/);
+    assert.deepEqual(errs, []);
+    await pg.close();
+  });
+
   test(`${k}・PC：3つの見方を開いてもエラーが出ない`, async () => {
     const { pg, errs } = await open(b!, 1100);
     await pg.click('[data-view="cluster"]');

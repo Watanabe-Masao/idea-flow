@@ -34,6 +34,10 @@ const fname = (d: MapData, id: string) => d.features.find(f => f.id === id)?.nam
 const issueLine = (d: MapData, i: MapData['issues'][number]) =>
   `#${i.number} ${i.title}（${i.open ? `開いて ${md(i.created)}〜・最後に動いた ${md(i.updated)}` : `閉じた ${md(i.closed)}`}）${i.stale ? '［古くなっている候補］' : ''}　機能：${i.features.map(f => fname(d, f)).join('、') || 'なし'}`;
 
+/** 画面の住所（系譜などへのリンク用）。コネクタが呼ばれた URL から決める（#70） */
+let ORIGIN = 'https://idea-flow.watanabe-masao0804.workers.dev';
+export const setOrigin = (o: string) => { if (/^https?:\/\//.test(o)) ORIGIN = o; };
+export const lineageUrl = (repo: string, n: number) => `${ORIGIN}/#repo=${encodeURIComponent(repo)}&lineage=${n}`;
 export async function mapAction(env: Env, action: string, a: Record<string, unknown>): Promise<string> {
   // プロジェクト（#77）：答えの文の中の番号（100万以上）を「名前#番号」に戻す
   const out = await mapAction0(env, action, a);
@@ -111,7 +115,7 @@ async function mapAction0(env: Env, action: string, a: Record<string, unknown>):
     const n = Number(String(a.n ?? a.number ?? '').replace('#', ''));
     const i = d.issues.find(x => x.number === n);
     if (!i) throw new Error(`Issue #${n} は取り込まれていません（action="sync" で読み直せます）`);
-    const L = [`■ ${issueLine(d, i)}`, `機能の決め方：${i.how || 'なし'}${i.nodes.length ? `／データ：${i.nodes.map(k => d.nodes[k]?.name ?? k).join('、')}` : ''}`, '', `■ つながり（${i.links.length}）`];
+    const L = [`■ ${issueLine(d, i)}`, `系譜の画面：${lineageUrl(d.repo, i.number)}`, `機能の決め方：${i.how || 'なし'}${i.nodes.length ? `／データ：${i.nodes.map(k => d.nodes[k]?.name ?? k).join('、')}` : ''}`, '', `■ つながり（${i.links.length}）`];
     for (const l of i.links) {
       L.push(`- [${KIND[l.kind]}] ${l.type === 'pr' ? 'PR' : 'Issue'} #${l.n} ${md(l.day)} ${l.title}${l.type === 'issue' ? (l.open ? '（開いている）' : '（閉じた）') : ''}`);
       for (const e of l.evidence) L.push(`    根拠：${e}`);
