@@ -11,13 +11,15 @@ let srv: Awaited<ReturnType<typeof start>>;
 before(async () => { srv = await start(PORT); });
 after(() => srv.close());
 
-async function open(b: Browser, width: number) {
+async function open(b: Browser, width: number, tab: 'today' | 'map' | 'docs' = 'map') {
   const pg = await b.newPage({ viewport: { width, height: 844 } }), errs: string[] = [];
   pg.on('pageerror', e => errs.push(String(e)));
   await pg.goto(URL0); await pg.evaluate(() => localStorage.setItem('idea-flow-token', 'adm')); await pg.reload();
   await pg.selectOption('#rrepo', REPO);
-  await pg.waitForSelector('[data-view="cluster"]');
-  await pg.waitForFunction(() => /確かめました|読めませんでした|途中だった/.test(document.body.innerText), null, { timeout: 30000 }); // 開いたときの読み直しが終わるまで
+  if (tab !== 'today') await pg.click(`[data-rsub="${tab}"]`);
+  if (tab === 'map') await pg.waitForSelector('[data-view="cluster"]');
+  if (tab === 'map') await pg.waitForFunction(() => /確かめました|読めませんでした|途中だった/.test(document.body.innerText), null, { timeout: 30000 }); // 開いたときの読み直しが終わるまで
+  else await pg.waitForTimeout(800);
   return { pg, errs };
 }
 const text = (pg: Page, sel: string) => pg.locator(sel).first().innerText();
@@ -51,14 +53,31 @@ for (const k of kinds) {
   });
 
   test(`${k}・スマホ：文書の画面の「気になる所」から、Issue の下書きを開ける（#9）`, async () => {
-    const { pg, errs } = await open(b!, 390);
-    await pg.getByText('文書', { exact: true }).first().click();
+    const { pg, errs } = await open(b!, 390, 'docs');
     await pg.getByText('詳しく見る').first().click();
     const href = await pg.locator('a:has-text("Issue の下書きを開く")').first().getAttribute('href');
     const u = new URL(href!);
     assert.equal(u.pathname, `/${REPO}/issues/new`);
     assert.match(u.searchParams.get('title')!, /^決まりと文書：/);
     assert.match(u.searchParams.get('body')!, /^機能：決まりと文書\n閉じる条件：/);
+    assert.deepEqual(errs, []);
+    await pg.close();
+  });
+
+  test(`${k}・スマホ：開くと「今日」が最初に出て、片づけたものは消え、開き直しても戻らない（#69）`, async () => {
+    const { pg, errs } = await open(b!, 390, 'today');
+    assert.equal(await pg.locator('[data-rsub="today"]').getAttribute('aria-selected'), 'true');
+    await pg.waitForSelector('.td-it');
+    const n0 = await pg.locator('.td-it').count();
+    assert.ok(n0 > 0, '判断の受信箱などが出る');
+    assert.match(await pg.innerText('#rtoday'), new RegExp(`今日決めること ${n0}件`));
+    const first = await pg.locator('.td-it .td-t').first().innerText();
+    await pg.locator('.td-it').first().locator('button[data-mark]').first().click();
+    await pg.waitForFunction(n => document.querySelectorAll('.td-it').length === n, n0 - 1);
+    await pg.waitForTimeout(300);
+    await pg.reload(); await pg.selectOption('#rrepo', REPO); await pg.waitForSelector('.td-it');
+    assert.equal(await pg.locator('.td-it').count(), n0 - 1, '片づけた印が残る');
+    assert.ok(!(await pg.locator('.td-it .td-t').allInnerTexts()).includes(first) || n0 > 1);
     assert.deepEqual(errs, []);
     await pg.close();
   });

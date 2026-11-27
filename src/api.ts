@@ -3,6 +3,7 @@ import { embedMany, MODEL } from './embed.ts';
 import { errorJson, json, jstDay, newId, nowIso, safeEqual } from './util.ts';
 import { analyze, dismiss, listFiles, rulesView, saveSource, setExternal, syncRules } from './rules.ts';
 import { mapView, syncMap } from './workmap.ts';
+import { markToday, seenToday, todayView } from './today.ts';
 
 const isAdmin = (req: Request, env: Env) => {
   const h = req.headers.get('authorization') ?? '';
@@ -27,7 +28,8 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       const sections = (await env.DB.prepare('SELECT heading, line, md FROM rule_sections WHERE doc = ? ORDER BY line').bind(doc.id).all()).results;
       return json({ doc, items, sections });
     }
-    if (req.method === 'GET' && p === '/api/map') { const t0 = Date.now(); const v = await mapView(env, url.searchParams.get('repo') ?? '', Math.min(60, Math.max(7, Number(url.searchParams.get('span')) || 21))); return json({ ...v, took: Date.now() - t0 }); } // took：計測（#44）
+    if (req.method === 'GET' && p === '/api/today') return json(await todayView(env, url.searchParams.get('repo') ?? ''));
+  if (req.method === 'GET' && p === '/api/map') { const t0 = Date.now(); const v = await mapView(env, url.searchParams.get('repo') ?? '', Math.min(60, Math.max(7, Number(url.searchParams.get('span')) || 21))); return json({ ...v, took: Date.now() - t0 }); } // took：計測（#44）
     if (req.method === 'GET' && p === '/api/rules/files') return json(await listFiles(env, url.searchParams.get('repo') ?? ''));
     if (req.method === 'GET' && p === '/api/selftest') {
       const v = await embedMany(env, ['満月の物語：ページ送り', '予報の履歴の取り込み']);
@@ -38,6 +40,8 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
       if (p === '/api/rules/source') return json(await saveSource(env, String(body.repo ?? ''), Array.isArray(body.files) ? body.files as string[] : []));
       if (p === '/api/rules/sync') return json(await syncRules(env, String(body.repo ?? '')));
       if (p === '/api/rules/analyze') return json(await analyze(env));
+      if (p === '/api/today/mark') return json(await markToday(env, String(body.repo ?? ''), String(body.key ?? ''), String(body.decision ?? '')));
+      if (p === '/api/today/seen') return json(await seenToday(env, String(body.repo ?? '')));
       if (p === '/api/map/sync') return json(await syncMap(env, String(body.repo ?? ''), { mode: body.mode === 'backfill' ? 'backfill' : 'update', pages: Math.min(6, Math.max(1, Number(body.pages) || 4)) }));
       if (p === '/api/rules/external') return json(await setExternal(env, String(body.repo ?? ''), String(body.path ?? ''), !!body.external));
       if (p === '/api/rules/dismiss') return json(await dismiss(env, String(body.key ?? ''), body.why ? String(body.why).slice(0, 200) : null));
