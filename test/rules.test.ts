@@ -156,3 +156,29 @@ for (const [name, b, want] of [
     assert.deepEqual(pair, [want]);
   } finally { globalThis.fetch = real; }
 });
+
+test('取り込み：GitHub の SHA が変わっていない文書は読み直さない・変わったものだけ読む（#45）', async () => {
+  const files: Record<string, string> = { 'CLAUDE.md': '# 全体\n- 決まりは docs/a.md を読む\n', 'docs/a.md': '# 表\n- 表の列は六つまで\n' };
+  const sha: Record<string, string> = { 'CLAUDE.md': 's1', 'docs/a.md': 'a1' };
+  const read: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (u: string | URL) => {
+    const url = new URL(String(u));
+    if (url.pathname.includes('/git/trees/')) return Response.json({ truncated: false, tree: Object.keys(files).map(p => ({ path: p, type: 'blob', sha: sha[p] })) });
+    const m = url.pathname.match(/\/contents\/(.+)$/);
+    if (m) { const p = decodeURIComponent(m[1]); read.push(p); return new Response(files[p]); }
+    return new Response('nf', { status: 404 });
+  }) as typeof fetch;
+  try {
+    const env = fakeEnv();
+    await saveSource(env, 'o/r', Object.keys(files));
+    const a = await syncRules(env, 'o/r');
+    assert.deepEqual([read.length, a.reused], [2, 0]);
+    read.length = 0;
+    const b = await syncRules(env, 'o/r');
+    assert.deepEqual([read, b.reused, b.items], [[], 2, a.items]);   // 何も変わっていない：読まない。中身は同じ
+    files['docs/a.md'] = '# 表\n- 表の列は六つまで\n- 見出しは太字にしない\n'; sha['docs/a.md'] = 'a2';
+    const c = await syncRules(env, 'o/r');
+    assert.deepEqual([read, c.reused, c.items], [['docs/a.md'], 1, a.items + 1]); // 変わった1つだけ読む
+  } finally { globalThis.fetch = real; }
+});

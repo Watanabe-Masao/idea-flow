@@ -24,7 +24,8 @@ export async function listFiles(env: Env, repo: string) {
   const all = tree.tree.filter(t => t.type === 'blob').map(t => t.path);
   const md = all.filter(p => /\.md$/i.test(p)).sort();
   const chosen = src && src.files.length ? new Set(src.files) : new Set(md.filter(defaultPick));
-  return { repo, branch, truncated: tree.truncated, all, files: md.map(p => ({ path: p, picked: chosen.has(p), external: externalByLicense(all, p), ...classify(p) })) };
+  const shaOf = new Map(tree.tree.filter(t => t.type === 'blob').map(t => [t.path, t.sha]));
+  return { repo, branch, truncated: tree.truncated, all, shaOf, files: md.map(p => ({ path: p, picked: chosen.has(p), external: externalByLicense(all, p), ...classify(p) })) };
 }
 
 export async function saveSource(env: Env, repo: string, files: string[], branch = 'main') {
@@ -44,11 +45,18 @@ export async function syncRules(env: Env, repo: string) {
   const now = nowIso();
   const docRows: unknown[][] = [], itemRows: unknown[][] = [], secRows: unknown[][] = [];
   // .md を全部（と package.json）まとめて読む。読めなければ、選んだものだけ1つずつ読む
-  const mdAll = info.files.map(f => f.path);
-  const bulk = await readMany(env, repo, info.branch, [...mdAll, ...(info.all.includes('package.json') ? ['package.json'] : [])]);
-  const texts = bulk ?? new Map<string, string>();
+  const mdAll = [...info.files.map(f => f.path), ...(info.all.includes('package.json') ? ['package.json'] : [])];
+  // GitHub の SHA が前回と同じものは、保存してある写しを使い、変わったものだけ読む（#45）
+  const kept = new Map((await env.DB.prepare('SELECT path, sha, text FROM rule_texts WHERE repo = ?').bind(repo).all<{ path: string; sha: string; text: string }>()).results.map(r => [r.path, r]));
+  const texts = new Map<string, string>();
+  for (const p of mdAll) { const k = kept.get(p); if (k && k.sha === info.shaOf.get(p)) texts.set(p, k.text); }
+  const toRead = mdAll.filter(p => !texts.has(p));
+  const bulk = toRead.length ? await readMany(env, repo, info.branch, toRead) : new Map<string, string>();
+  for (const [p, t] of bulk ?? []) texts.set(p, t);
+  const fresh = new Map(bulk ?? []);
   for (const path of picked) {
     const src = texts.get(path) ?? await gh<string>(env, `/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(info.branch)}`, true);
+    if (!texts.has(path)) fresh.set(path, src);
     texts.set(path, src);
     const c = classify(path);
     const p = parseRules(src, c.kind);
@@ -67,12 +75,16 @@ export async function syncRules(env: Env, repo: string) {
     ...bulkInsert(env.DB, 'INSERT OR IGNORE INTO rule_sections (doc, heading, line, md) VALUES', 4, secRows),
     env.DB.prepare('UPDATE rule_sources SET synced_at = ?, files = ? WHERE repo = ?').bind(now, JSON.stringify(picked), repo),
   ]);
+  // 写しを残す：読んだものは新しい SHA で、もう無いものは消す（大きすぎるもの＝1MB 超は残さず、次も読む）
+  const saveT = [...fresh].filter(([p, t]) => info.shaOf.has(p) && t.length < 1_000_000).map(([p, t]) => env.DB.prepare('INSERT OR REPLACE INTO rule_texts (repo, path, sha, text) VALUES (?, ?, ?, ?)').bind(repo, p, info.shaOf.get(p), t));
+  const gone = [...kept.keys()].filter(p => !info.shaOf.has(p)).map(p => env.DB.prepare('DELETE FROM rule_texts WHERE repo = ? AND path = ?').bind(repo, p));
+  for (let k = 0, all = [...saveT, ...gone]; k < all.length; k += 50) await env.DB.batch(all.slice(k, k + 50));
   await env.DB.prepare('INSERT OR IGNORE INTO rule_sources (repo, branch, files, synced_at) VALUES (?, ?, ?, ?)').bind(repo, info.branch, JSON.stringify(picked), now).run();
   const auditN = await runAudit(env, repo, info.branch, info.all, texts, now, picked);
   const items = (await env.DB.prepare('SELECT id, heading, text FROM rule_items').all<{ id: string; heading: string; text: string }>()).results;
   const embedded = await upsertEmbeddings(env, items.map(i => ({ kind: 'rule' as const, ref: i.id, text: ruleText(i) })));
   const findings = await analyze(env);
-  return { repo, docs: docRows.length, items: itemRows.length, embedded, findings, audit: auditN, readAll: !!bulk };
+  return { repo, docs: docRows.length, items: itemRows.length, embedded, findings, audit: auditN, readAll: !!bulk, read: fresh.size, reused: mdAll.length - toRead.length };
 }
 
 /**
