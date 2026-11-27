@@ -1,7 +1,7 @@
 // 「今日」の画面（#69）：開いたら最初に出る。人が決めることだけを並べ、片づけたものは消す。
 // 決めるのは人。この画面は GitHub に書かない（閉じる・Issue を立てるのは、人が GitHub で）
 import type { Env } from './types.ts';
-import { mapView, syncMap } from './workmap.ts';
+import { mapView, relabel, syncMap } from './workmap.ts';
 
 const H = (t: string) => { let h = 0; for (const c of t) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h.toString(36); };
 const nowIso = () => new Date().toISOString();
@@ -37,18 +37,19 @@ export async function todayView(env: Env, repo: string) {
   for (const i of v.issues.filter(i => i.open)) {
     const prs = i.links.filter(l => l.type === 'pr' && l.kind !== 'candidate');
     if (!prs.length) continue;
-    items.push({ key: `close:${i.number}:${i.updated}`, kind: 'close', title: `#${i.number} ${i.title}`, sub: i.cond ? `閉じる条件：${i.cond}` : '「閉じる条件：」が書かれていません', url: `https://github.com/${repo}/issues/${i.number}`, n: i.number,
+    items.push({ key: `close:${i.number}:${i.updated}`, kind: 'close', title: `#${i.number} ${i.title}`, sub: i.cond ? `閉じる条件：${i.cond}` : '「閉じる条件：」が書かれていません', url: i.url || `https://github.com/${repo}/issues/${i.number}`, n: i.number,
       links: prs.slice(0, 5).map(l => ({ n: l.n, t: l.title, url: l.url, kind: l.kind })) });
   }
   // 気になる所
-  for (const i of v.issues.filter(i => i.stale)) items.push({ key: `stale:${i.number}:${i.updated}`, kind: 'stale', title: `#${i.number} ${i.title}`, sub: `つながる機能に、7日以上マージがない（最後に動いた ${i.updated}）`, url: `https://github.com/${repo}/issues/${i.number}`, n: i.number });
+  for (const i of v.issues.filter(i => i.stale)) items.push({ key: `stale:${i.number}:${i.updated}`, kind: 'stale', title: `#${i.number} ${i.title}`, sub: `つながる機能に、7日以上マージがない（最後に動いた ${i.updated}）`, url: i.url || `https://github.com/${repo}/issues/${i.number}`, n: i.number });
   for (const u of v.unmatched) items.push({ key: `unmatched:${u.n}`, kind: 'unmatched', title: `PR #${u.n} ${u.t}`, sub: `どの機能にも当たらない（${u.files.slice(0, 2).join('、') || 'ファイルなし'}）。カタログに足すか`, url: u.url, n: u.n });
   for (const c of conf.results as { key: string; a: string; b: string | null; pa: string; pb: string | null }[]) items.push({ key: `conflict:${c.key}`, kind: 'conflict', title: `${c.a}${c.b ? ` ⇔ ${c.b}` : ''}`, sub: `文書の食い違いの候補（${c.pa}${c.pb && c.pb !== c.pa ? `・${c.pb}` : ''}）` });
   for (const t of v.topics.filter(t => !t.feature && t.first >= since)) items.push({ key: `topic:${t.name}`, kind: 'topic', title: t.name, sub: `新しい話題（Issue ${t.issues.length}件・PR ${t.prs.length}件）。機能に上げるか・別名にまとめるか・話題のままか` });
   // 前回から変わったこと：機能ごとに1行
   // いちばん新しい題：日は新しい方から、同じ日の中はマージの新しい順（byDay は新しい順に並んでいる）
   const changes = v.features.map(f => { const ks = v.days.map((d, k) => k).filter(k => v.days[k] >= since && f.byDay[k].length); const n = ks.reduce((a, k) => a + f.byDay[k].length, 0); return n ? { id: f.id, name: f.name, n, last: f.byDay[ks.at(-1)!][0].t } : null; }).filter(Boolean);
-  return { repo, catalog: true as const, since, items: items.filter(x => !done.has(x.key)), changes, decided: done.size };
+  // プロジェクト（#77）では、番号を「名前#番号」に戻して返す（印のキーは数のまま）
+  return { repo, catalog: true as const, since, items: items.filter(x => !done.has(x.key)).map(x => ({ ...relabel({ ...x, key: '' }, v.names), key: x.key })), changes: relabel(changes, v.names), decided: done.size };
 }
 
 /** 人が片づけた（それでいい・決まりにする・違う・まだ）。消すのではなく、印を残す */

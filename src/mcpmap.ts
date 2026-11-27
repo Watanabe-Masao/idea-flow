@@ -1,7 +1,7 @@
 // コネクタ（MCP）の地図の action。Claude が作業の前に読む：全体 → 機能 → Issue の周辺（根拠つき）。
 import type { Env } from './types.ts';
 import { CATALOGS } from './catalogs.ts';
-import { catalogOf, mapView, syncMap } from './workmap.ts';
+import { catalogOf, mapView, membersOf, relabel, shortOf, syncMap } from './workmap.ts';
 import { selfCheck, WRITING_RULES } from './selfcheck.ts';
 
 type MapData = Extract<Awaited<ReturnType<typeof mapView>>, { catalog: true }> & { took: number };
@@ -35,6 +35,12 @@ const issueLine = (d: MapData, i: MapData['issues'][number]) =>
   `#${i.number} ${i.title}（${i.open ? `開いて ${md(i.created)}〜・最後に動いた ${md(i.updated)}` : `閉じた ${md(i.closed)}`}）${i.stale ? '［古くなっている候補］' : ''}　機能：${i.features.map(f => fname(d, f)).join('、') || 'なし'}`;
 
 export async function mapAction(env: Env, action: string, a: Record<string, unknown>): Promise<string> {
+  // プロジェクト（#77）：答えの文の中の番号（100万以上）を「名前#番号」に戻す
+  const out = await mapAction0(env, action, a);
+  let names: string[] = []; try { names = membersOf(repoOf(a)).map(shortOf); } catch { /* repo が無ければそのまま */ }
+  return relabel(out, names);
+}
+async function mapAction0(env: Env, action: string, a: Record<string, unknown>): Promise<string> {
   if (action === 'sync') {
     const repo = repoOf(a);
     const u = await syncMap(env, repo, { mode: 'update' });

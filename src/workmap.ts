@@ -16,15 +16,46 @@ export interface Catalog {
   words: [string, string[]][];
   /** 機能の中の話題（作品ごとなど）。タグか、題に words のどれかがあれば、その話題に入る */
   topics?: { name: string; feature: string; words: string[] }[];
+  /** プロジェクト（#77）：複数のリポジトリを1つの地図に束ねる。最初がこのカタログのリポジトリ。機能の files は「名前:正規表現」でリポジトリを絞れる */
+  repos?: string[];
 }
 export const catalogOf = (repo: string): Catalog | null => CATALOGS[repo] ?? null;
+/** プロジェクトのリポジトリ（1つだけのときは自分だけ） */
+export const membersOf = (repo: string): string[] => catalogOf(repo)?.repos ?? [repo];
+/**
+ * プロジェクトの中の番号（#77）。2つ目からのリポジトリの番号は、100万ずつずらして1つの番号にする（knowledge-net#12 → 1000012）。
+ * 番号で動く仕組み（つながり・引き継ぎ・今日の印）をそのまま使うため。画面とコネクタでは labelOf で「名前#番号」に戻す
+ */
+export const QB = 1_000_000;
+export const qid = (idx: number, n: number) => idx * QB + n;
+export const shortOf = (repo: string) => repo.split('/').pop()!;
+// プロジェクトでは、最初のリポジトリも含めてどれも 100万×(何番目＋1) からの番号にする（文の中で、どのリポジトリの #3 かを必ず書けるように）
+export const labelOf = (names: string[], n: number) => n >= QB ? `${names[Math.floor(n / QB) - 1] ?? '?'}#${n % QB}` : `#${n}`;
+/** 本文の番号を、プロジェクトの番号に書き換える：別のリポジトリへの参照（owner/name#n・name#n・URL）と、同じリポジトリの #n */
+/** プロジェクトの番号（100万以上）を、文の中で「名前#番号」に戻す。地図の答え全体にかける（数としての番号はそのまま） */
+export function relabel<T>(v: T, names: string[]): T {
+  if (names.length < 2) return v;
+  const fix = (x: unknown): unknown => typeof x === 'string' ? x.replace(/#(\d{7,})\b/g, (_m, n: string) => labelOf(names, +n)) : Array.isArray(x) ? x.map(fix) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, y]) => [k, fix(y)])) : x;
+  return fix(v) as T;
+}
+export function qText(text: string, idx: number, members: string[]): string {
+  if (members.length < 2) return text;
+  const names = members.map(shortOf), owners = members;
+  let t = String(text ?? '').replace(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/(\d+)/g, (m, r: string, n: string) => { const j = owners.findIndex(o => o.toLowerCase() === r.toLowerCase()); return j < 0 ? m : `\u0000${qid(j + 1, +n)}`; });
+  t = t.replace(/(?<![\w/&])(?:([\w.-]+)\/)?([\w.-]+)#(\d+)\b/g, (m, o: string | undefined, nm: string, n: string) => { const j = names.findIndex((x, k) => x.toLowerCase() === nm.toLowerCase() && (!o || owners[k].toLowerCase().startsWith(o.toLowerCase() + '/'))); return j < 0 ? m : `\u0000${qid(j + 1, +n)}`; });
+  t = t.replace(/(?<![\w/&\u0000])#(\d+)\b/g, (_m, n: string) => `#${qid(idx + 1, +n)}`);
+  return t.replace(/\u0000/g, '#');
+}
 
 type Pr = { number: number; title: string; url: string; merged_at: string; files: string[]; body: string; closes: number[] };
 type Issue = { number: number; open: number; title: string; body: string; created: string; updated: string; closed: string | null; refs: string; parent?: number | null };
 
 /** 変えたファイルから機能を決める（その機能の files のどれかに当たれば、その機能の作業） */
 export function featuresOfFiles(cat: Catalog, files: string[]) {
-  const hit = (f: Feature) => f.files.some(rx => { const re = new RegExp(rx); return files.some(p => re.test(p)); });
+  // プロジェクトでは、ファイルは「名前:パス」。files の「名前:正規表現」はそのリポジトリだけに、名前の無いものはどのリポジトリにも当てる
+  const names = (cat.repos ?? []).map(shortOf);
+  const split = (x: string) => { const m = x.match(/^([\w.-]+):(.*)$/s); return m && names.includes(m[1]) ? [m[1], m[2]] as const : [null, x] as const; };
+  const hit = (f: Feature) => f.files.some(rx => { const [rn, body] = split(rx), re = new RegExp(body); return files.some(p => { const [fn, path] = split(p); return (!rn || rn === fn) && re.test(path); }); });
   const main = cat.features.filter(f => !f.fallback && hit(f));
   return (main.length ? main : cat.features.filter(f => f.fallback && hit(f))).map(f => f.id);
 }
@@ -116,7 +147,17 @@ type SyncRow = { pr_cursor: string | null; pr_done: number; prs_at: string | nul
  * 重なったら：D1 のロック（sync_id、2分で期限切れ）を取れなかった方は何もしない（busy）。
  * 書き込みはすべて「ロックがまだ自分のものなら」の条件つきなので、期限切れのあとで遅れて書こうとした古い処理は何も書けない
  */
+/** 同期。プロジェクトなら、そのリポジトリを順に（#77）。数は足し合わせ、どれかが途中なら途中 */
 export async function syncMap(env: Env, repo: string, opt: { mode?: 'update' | 'backfill'; pages?: number } | number = {}) {
+  const members = membersOf(repo);
+  if (members.length < 2) return syncOne(env, repo, opt);
+  const xs = await members.reduce<Promise<SyncResult[]>>(async (p, r) => [...await p, await syncOne(env, r, opt)], Promise.resolve([]));
+  const sum = (k: 'backfilled' | 'updated' | 'issues' | 'calls' | 'ms') => xs.reduce((a, x) => a + x[k], 0);
+  return { ...xs[0], busy: xs.some(x => x.busy), backfilled: sum('backfilled'), updated: sum('updated'), issues: sum('issues'), calls: sum('calls'), ms: sum('ms'),
+    backfillDone: xs.every(x => x.backfillDone), caughtUp: xs.every(x => x.caughtUp), issuesMore: xs.some(x => x.issuesMore), issuesFull: xs.some(x => x.issuesFull) };
+}
+type SyncResult = { mode: 'update' | 'backfill'; busy: boolean; backfilled: number; updated: number; issues: number; backfillDone: boolean; caughtUp: boolean; issuesMore: boolean; issuesFull: boolean; calls: number; ms: number };
+async function syncOne(env: Env, repo: string, opt: { mode?: 'update' | 'backfill'; pages?: number } | number = {}): Promise<SyncResult> {
   if (!REPO_RE.test(repo)) throw new Error('リポジトリの名前が正しくありません');
   const o2 = typeof opt === 'number' ? { mode: 'backfill' as const, pages: opt } : opt;
   const mode = o2.mode ?? 'update', pages = o2.pages ?? 4, t0 = Date.now(), c0 = gqlCalls;
@@ -362,17 +403,30 @@ const addDays = (day: string, n: number) => new Date(Date.parse(day + 'T00:00:00
  */
 export async function mapView(env: Env, repo: string, span = 21, today = jstDay(nowIso())) {
   const cat = catalogOf(repo);
-  // D1 への問い合わせは1回の batch にまとめる（#44：Worker と D1 が離れていると、1回ごとに往復の待ちがかかる）
-  const [sr, pr, ir] = await env.DB.batch([env.DB.prepare('SELECT pr_done, issues_at, prs_at, reviewed_at, issues_more FROM map_sync WHERE repo = ?').bind(repo), env.DB.prepare('SELECT number, title, url, merged_at, files, closes, digest, CASE WHEN digest IS NULL THEN body END AS body FROM pr_activity WHERE repo = ? ORDER BY merged_at DESC').bind(repo), env.DB.prepare('SELECT * FROM map_issues WHERE repo = ? ORDER BY open DESC, updated DESC').bind(repo)]);
-  const sync = ((sr.results as unknown[])[0] ?? null) as ({ pr_done: number; issues_at: string | null; prs_at: string | null; reviewed_at: string | null; issues_more: number }) | null;
+  // D1 への問い合わせは1回の batch にまとめる（#44：Worker と D1 が離れていると、1回ごとに往復の待ちがかかる）。プロジェクトなら、そのリポジトリ全部（#77）
+  const members = membersOf(repo), inQ = members.map(() => '?').join(', ');
+  const [sr, pr, ir] = await env.DB.batch([
+    env.DB.prepare(`SELECT repo, pr_done, issues_at, prs_at, reviewed_at, issues_more FROM map_sync WHERE repo IN (${inQ})`).bind(...members),
+    env.DB.prepare(`SELECT repo, number, title, url, merged_at, files, closes, digest, CASE WHEN digest IS NULL THEN body END AS body FROM pr_activity WHERE repo IN (${inQ}) ORDER BY merged_at DESC`).bind(...members),
+    env.DB.prepare(`SELECT * FROM map_issues WHERE repo IN (${inQ}) ORDER BY open DESC, updated DESC`).bind(...members)]);
+  const syncs = sr.results as { repo: string; pr_done: number; issues_at: string | null; prs_at: string | null; reviewed_at: string | null; issues_more: number }[];
+  const own = syncs.find(x => x.repo === repo) ?? null;
+  // プロジェクトの同期の位置：いちばん遅れているリポジトリに合わせる（見直しの記録は、カタログのリポジトリのもの）
+  const minAt = (k: 'issues_at' | 'prs_at') => syncs.length < members.length || syncs.some(x => !x[k]) ? null : syncs.map(x => x[k]!).sort()[0];
+  const sync = own && (members.length < 2 ? own : { ...own, pr_done: syncs.every(x => x.pr_done) && syncs.length === members.length ? 1 : 0, prs_at: minAt('prs_at'), issues_at: minAt('issues_at'), issues_more: syncs.some(x => x.issues_more) ? 1 : 0 });
+  const idxOf = (r: unknown) => Math.max(0, members.indexOf(String(r))), names = members.map(shortOf), Q = (ix: number, n: number) => members.length > 1 ? qid(ix + 1, n) : n;
   if (!cat) return { repo, catalog: false as const, sync };
   const days = Array.from({ length: span }, (_, k) => addDays(today, k - span + 1));
   // 説明は全文ではなく、要る行だけ（digest）を読む。digest の無い古い行だけ全文を読み、作って書き戻す（1回だけ）
   const raw = pr.results as Record<string, unknown>[];
-  const fill = raw.filter(r => r.digest == null).map(r => ({ n: Number(r.number), d: prDigest(String(r.body ?? '')) }));
-  for (let k = 0; k < fill.length; k += 50) await env.DB.batch(fill.slice(k, k + 50).map(x => env.DB.prepare('UPDATE pr_activity SET digest = ? WHERE repo = ? AND number = ? AND digest IS NULL').bind(x.d, repo, x.n)));
-  const dOf = new Map(fill.map(x => [x.n, x.d]));
-  const prs: Pr[] = raw.map(r => ({ number: r.number, title: r.title, url: r.url, merged_at: r.merged_at, files: JSON.parse(String(r.files)), closes: JSON.parse(String(r.closes ?? '[]')), body: String(r.digest ?? dOf.get(Number(r.number)) ?? '') }) as Pr);
+  const fill = raw.filter(r => r.digest == null).map(r => ({ repo: String(r.repo), n: Number(r.number), d: prDigest(String(r.body ?? '')) }));
+  for (let k = 0; k < fill.length; k += 50) await env.DB.batch(fill.slice(k, k + 50).map(x => env.DB.prepare('UPDATE pr_activity SET digest = ? WHERE repo = ? AND number = ? AND digest IS NULL').bind(x.d, x.repo, x.n)));
+  const dOf = new Map(fill.map(x => [`${x.repo}#${x.n}`, x.d]));
+  // プロジェクトでは、番号をずらし（qid）、本文の参照を書き換え、ファイルに「名前:」を付ける。1つのリポジトリならそのまま
+  const multi = members.length > 1;
+  const prs: Pr[] = raw.map(r => { const ix = idxOf(r.repo); return { number: Q(ix, Number(r.number)), title: r.title, url: r.url, merged_at: r.merged_at,
+    files: (JSON.parse(String(r.files)) as string[]).map(f => multi ? `${names[ix]}:${f}` : f), closes: (JSON.parse(String(r.closes ?? '[]')) as number[]).map(n => Q(ix, n)),
+    body: qText(String(r.digest ?? dOf.get(`${r.repo}#${r.number}`) ?? ''), ix, members) }; }) as Pr[];
   const of = new Map(prs.map(p => { const byFile = featuresOfFiles(cat, p.files), byTag = splitTags(cat, tagsOf(p.body)).features; return [p.number, [...new Set([...byFile.filter(id => !(byTag.length && cat.features.find(f => f.id === id)?.fallback)), ...byTag])]]; }));
   const prTopics = new Map(prs.map(p => [p.number, topicsOf(cat, p.title, p.body)]));
   const idx = new Map(days.map((d, k) => [d, k]));
@@ -388,14 +442,14 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   });
   const stOf = new Map(features.map(f => [f.id, f.state]));
   const old = addDays(today, -7);
-  const rows = ir.results as Issue[];
+  const rows = (ir.results as (Issue & { repo: string })[]).map(i => { const ix = idxOf(i.repo); return multi ? { ...i, number: Q(ix, i.number), body: qText(i.body, ix, members), refs: JSON.stringify(refLines(qText(i.body, ix, members))), parent: i.parent ? Q(ix, i.parent) : i.parent, url: `https://github.com/${i.repo}/issues/${i.number}` } : { ...i, url: `https://github.com/${i.repo}/issues/${i.number}` }; });
   const linked = rows.map(i => ({ i, l: linkIssue(cat, i) }));
   const links = issueLinks(repo, linked.map(({ i, l }) => ({ number: i.number, open: !!i.open, title: i.title, created: i.created, closed: i.closed, features: l.features.filter(id => !cat.features.find(f => f.id === id)?.fallback), refs: JSON.parse(i.refs || '[]'), parent: i.parent ?? null })),
     prs.map(p => ({ ...p, features: of.get(p.number)!.filter(id => !cat.features.find(f => f.id === id)?.fallback) })));
   const issues = linked.map(({ i, l }) => {
     const fs = l.features.filter(id => stOf.has(id));
     const stale = !!i.open && fs.length > 0 && fs.every(id => stOf.get(id) === 2) && jstDay(i.updated) < old;
-    return { number: i.number, open: !!i.open, title: i.title, created: jstDay(i.created), updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale, links: links.get(i.number) ?? [], topics: topicsOf(cat, i.title, i.body), cond: (i.body.match(/閉じる条件\s*[:：]\s*(.+)/)?.[1] ?? '').trim().slice(0, 200) };
+    return { number: i.number, open: !!i.open, title: i.title, created: jstDay(i.created), updated: jstDay(i.updated), closed: i.closed ? jstDay(i.closed) : null, features: fs, nodes: l.nodes, how: l.how, stale, url: (i as { url?: string }).url ?? '', links: links.get(i.number) ?? [], topics: topicsOf(cat, i.title, i.body), cond: (i.body.match(/閉じる条件\s*[:：]\s*(.+)/)?.[1] ?? '').trim().slice(0, 200) };
   });
   const inSpan = prs.filter(p => idx.has(jstDay(p.merged_at)));
   const writing = writingCheck(cat, inSpan, rows.filter(i => idx.has(jstDay(i.created))), links);
@@ -411,7 +465,7 @@ export async function mapView(env: Env, repo: string, span = 21, today = jstDay(
   for (const p of prs) for (const t of prTopics.get(p.number) ?? []) touch(t, jstDay(p.merged_at)).prs.push({ n: p.number, t: p.title, day: jstDay(p.merged_at), url: p.url });
   const topics = [...tp.values()].sort((a, b) => b.last.localeCompare(a.last));
   const prTopicList = Object.fromEntries([...prTopics].filter(([, t]) => t.length));
-  return { repo, catalog: true as const, topics, prTopics: prTopicList, sync, today, days, features, nodes: cat.nodes, issues, unmatched, lacks, owns, writing,
+  return relabel({ repo, catalog: true as const, members, names, topics, prTopics: prTopicList, sync, today, days, features, nodes: cat.nodes, issues, unmatched, lacks, owns, writing,
     counts: { prs: inSpan.length, building: features.filter(f => f.state === 0).length, settled: features.filter(f => f.state === 1).length, stopped: features.filter(f => f.state === 2).length,
-      openIssues: issues.filter(i => i.open).length, stale: issues.filter(i => i.stale).length, unused: Object.values(cat.nodes).filter(nd => nd.note === '画面なし').length } };
+      openIssues: issues.filter(i => i.open).length, stale: issues.filter(i => i.stale).length, unused: Object.values(cat.nodes).filter(nd => nd.note === '画面なし').length } }, names);
 }
