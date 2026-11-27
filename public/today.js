@@ -5,11 +5,11 @@ const api = (p, o) => window.IF.api(p, o);
 const GH = r => `https://github.com/${r}`;
 const SEC = [
   ['判断の受信箱', ['own', 'lack'], '直近7日の PR で、Claude が決まりにないことを自分で判断した所と、足りなかった決まり。PR ごとに見て決めます。'],
-  ['閉じてよさそうな Issue', ['close'], '番号で書かれた PR がマージ済みの、開いている Issue。閉じる条件と見比べてください（閉じるのは GitHub で）。'],
+  ['閉じてよさそうな Issue', ['close'], '番号で書かれた PR がマージ済みの、開いている Issue。閉じる条件と見比べてください。閉じるのは GitHub で（閉じたら、次に読み直したときに消えます）。'],
   ['気になる所', ['stale', 'unmatched', 'conflict', 'topic'], ''],
 ];
 const LABEL = { own: 'Claude の判断', lack: '足りなかった決まり', close: '閉じてよさそう', stale: '古くなっている候補', unmatched: 'どの機能にも当たらない', conflict: '食い違いの候補', topic: '新しい話題' };
-let EL = null, REPO = '', D = null, ERR = '', SEEN = new Set();
+let EL = null, REPO = '', D = null, ERR = '', SEEN = new Set(), REQ = 0;
 
 const draft = (it) => {
   const t = `決まりと文書：${it.title.replace(/^PR #(\d+).*/, '#$1')} の判断を決まりにする`;
@@ -21,7 +21,8 @@ const btn = (it, d, l, href) => href
   : `<button class="btn s" data-mark="${esc(it.key)}|${d}">${l}</button>`;
 function acts(it) {
   if (it.kind === 'own' || it.kind === 'lack') return btn(it, 'ok', 'それでいい') + btn(it, 'rule', '決まりにする', draft(it)) + btn(it, 'no', '違う（PR で伝える）', it.url);
-  if (it.kind === 'close') return btn(it, 'done', 'GitHub で閉じる', it.url) + btn(it, 'later', 'まだ');
+  // 閉じるかどうかは GitHub で決める。開くだけではカードを消さない（閉じたら、次に読み直したときに消える）
+  if (it.kind === 'close') return `<a class="btn s" href="${esc(it.url)}" target="_blank" rel="noopener">GitHub で開く</a>` + btn(it, 'later', 'まだ閉じない');
   return (it.url ? btn(it, 'ok', 'GitHub で見る', it.url) : '') + btn(it, 'ok', '見た');
 }
 function card(it) {
@@ -33,7 +34,8 @@ function card(it) {
 function draw() {
   if (!EL) return;
   if (ERR) { EL.innerHTML = `<p class="sub">読めませんでした：${esc(ERR)}</p>`; return; }
-  if (!D) { EL.innerHTML = '<p class="sub">読み込み中…</p>'; return; }
+  // 表示するのは、いま選んでいるリポジトリの答えだけ（切り替えの途中に、前のリポジトリのカードを出さない）
+  if (!D || D.repo !== REPO) { EL.innerHTML = '<p class="sub">読み込み中…</p>'; return; }
   if (!D.catalog) { EL.innerHTML = `<p class="sub">${esc(REPO)} には機能の一覧（カタログ）がありません。</p>`; return; }
   const its = D.items;
   if (!its.length) { EL.innerHTML = `<div class="td-empty">今日は決めることはありません</div>`; return; }
@@ -43,20 +45,27 @@ function draw() {
     ${D.changes.length ? `<h3 class="td-h">前回（${D.since.slice(5).replace('-', '/')}）から変わったこと</h3><ul class="td-ch">${D.changes.map(c => `<li>${esc(c.name)}：${c.n}件（${esc(c.last)}）</li>`).join('')}</ul>` : ''}`;
 }
 async function load() {
-  try { D = await api(`/api/today?repo=${encodeURIComponent(REPO)}`); ERR = ''; } catch (e) { ERR = e.message; }
-  draw();
-  if (D?.catalog && !SEEN.has(REPO)) { SEEN.add(REPO); api('/api/today/seen', { method: 'POST', body: JSON.stringify({ repo: REPO }) }).catch(() => {}); }
+  // 頼んだ順に番号をふり、最後に頼んだ分（いま選んでいるリポジトリ）の答えだけを使う。古い答えは捨てる
+  const id = ++REQ, repo = REPO;
+  let x = null, err = '';
+  try { x = await api(`/api/today?repo=${encodeURIComponent(repo)}`); } catch (e) { err = e.message; }
+  if (id !== REQ || repo !== REPO) return;
+  if (x && x.repo !== repo) { err = '別のリポジトリの答えが届いたので、捨てました'; x = null; }
+  D = x; ERR = err; draw();
+  if (D?.catalog && !SEEN.has(repo)) { SEEN.add(repo); api('/api/today/seen', { method: 'POST', body: JSON.stringify({ repo }) }).catch(() => {}); }
 }
 function bind(el) {
   if (el.dataset.tdBound) return; el.dataset.tdBound = '1';
   el.addEventListener('click', e => {
     const m = e.target.closest('[data-mark]'); if (!m || !D) return;
-    const [key, decision] = m.dataset.mark.split('|');
+    // 判断の保存先は、表示しているカードのリポジトリ（D.repo）。選んでいるものと違えば何もしない
+    if (D.repo !== REPO) { e.preventDefault(); return; }
+    const repo = D.repo, [key, decision] = m.dataset.mark.split('|');
     D.items = D.items.filter(x => x.key !== key); // すぐ消す（印は後ろで残す）。リンクのものは GitHub も開く
     setTimeout(draw, 0);
-    api('/api/today/mark', { method: 'POST', body: JSON.stringify({ repo: REPO, key, decision }) }).catch(err => { ERR = err.message; draw(); });
+    api('/api/today/mark', { method: 'POST', body: JSON.stringify({ repo, key, decision }) }).catch(err => { ERR = err.message; draw(); });
   });
 }
-async function render(el, repo) { EL = el; bind(el); if (REPO !== repo) { REPO = repo; D = null; } draw(); await load(); }
+async function render(el, repo) { EL = el; bind(el); if (REPO !== repo) { REPO = repo; D = null; ERR = ''; } draw(); await load(); }
 window.Today = { render };
 })();
