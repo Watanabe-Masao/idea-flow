@@ -48,7 +48,7 @@ document.head.appendChild(css);
 // 状態は、見た事実のまま言う（「止まっている」と決めつけない）
 const ST = ['直近4日に3件以上マージ', '直近7日にマージあり', '直近7日マージなし'];
 const S = {}; let EL = null, REPO = '';
-const st = r => S[r] || (S[r] = { data: null, span: 21, view: 'feat', ifilt: 'all', isel: null, ifocus: null, cl: null, csel: null, cand: false, lin: null, linBack: null, filt: -1, sel: null, node: null, busy: false, note: '', synced: false });
+const st = r => S[r] || (S[r] = { data: null, span: 21, view: 'feat', ifilt: 'all', isel: null, ifocus: null, cl: null, csel: null, cand: false, lin: null, linBack: null, feat: null, filt: -1, sel: null, node: null, busy: false, note: '', synced: false });
 const lv = n => n === 0 ? 'var(--line)' : n <= 1 ? 'var(--h1)' : n <= 3 ? 'var(--h2)' : 'var(--h3)';
 const md = d => d ? d.slice(5).replace('-', '/') : '';
 const GH = r => `https://github.com/${r}`;
@@ -90,7 +90,7 @@ function writing(w) {
 const report = r => !r ? '' : `<div style="font-size:13px;margin:2px 0 4px;padding:6px 8px;border-radius:8px;background:var(--soft)">${[['確かめた決まり', r.read], ['自分で判断した所', r.own], ['足りなかった決まり', r.lack]].map(([h, xs]) => `<div><b>${h}</b>：${xs.length ? xs.map(esc).join('／') : 'なし'}</div>`).join('')}</div>`;
 function detail(d, f) {
   const iss = d.issues.filter(i => i.features.includes(f.id));
-  return `<div style="color:var(--ink)">${esc(f.desc)}</div><div style="margin-top:4px">入口：${esc(f.group)}　データ：${esc(f.data.map(k => d.nodes[k]?.name || k).join('、') || 'なし')}</div>
+  return `<div class="row" style="margin:0 0 6px"><button class="btn s" data-fpage="${esc(f.id)}">機能のページ</button></div><div style="color:var(--ink)">${esc(f.desc)}</div><div style="margin-top:4px">入口：${esc(f.group)}　データ：${esc(f.data.map(k => d.nodes[k]?.name || k).join('、') || 'なし')}</div>
   <h4>最近の作業</h4><ul>${f.recent.map(p => `<li><a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.n}</a> ${md(p.day)} ${esc(p.t)}${report(p.report)}</li>`).join('') || '<li>なし</li>'}</ul>
   <h4>関係する Issue</h4>${iss.length ? iss.map(i => iline(d, i)).join('') : '<div>なし</div>'}`;
 }
@@ -292,6 +292,7 @@ function draw() {
   if (s.view === 'cluster') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${clusterView(d, s)}</div>`, d && d.names); sheet(s._sheet); return; }
   sheet(null);
   if (s.view === 'issue') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${issueView(d, s)}</div>`, d && d.names); return; }
+  if (s.view === 'fpage') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${window.Lineage.feature(d, s.feat, { back: s.linBack && s.linBack.name })}</div>`, d && d.names); return; }
   if (s.view === 'lineage') { EL.innerHTML = relabelHtml(`<div class="wm">${top}${window.Lineage.render(d, s.lin, { cand: s.cand, back: s.linBack && s.linBack.name })}</div>`, d && d.names); return; }
   const c = d.counts, n = d.days.length, step = n > 30 ? 14 : 7;
   let rows = '', g = '';
@@ -359,7 +360,8 @@ function bind(el) {
     const vw = t.closest('[data-view]'); if (vw) { s.view = vw.dataset.view; s.from = null; s.linBack = null; setHash(null); hideDay(); draw(); return; }
     const ifl = t.closest('[data-ifilt]'); if (ifl) { s.ifilt = ifl.dataset.ifilt; draw(); return; }
     const ln = t.closest('[data-lin]'); if (ln) { e.preventDefault(); openLineage(+ln.dataset.lin, true); return; }
-    if (t.closest('[data-lnback]') && s.linBack) { const b = s.linBack; s.view = b.view; s.cl = b.cl; s.csel = b.csel; s.ifocus = b.ifocus; s.linBack = null; s.lin = null; setHash(null); draw(); return; }
+    const fp = t.closest('[data-fpage]'); if (fp) { e.preventDefault(); openFeature(fp.dataset.fpage, true); return; }
+    if (t.closest('[data-lnback]') && s.linBack) { const b = s.linBack; s.view = b.view; s.lin = null; if (b.view === 'fpage') { s.feat = b.feat; s.linBack = b.back || null; setHash(b.feat, 'feature'); } else { s.cl = b.cl; s.csel = b.csel; s.ifocus = b.ifocus; s.linBack = null; setHash(null); } draw(); return; }
     const tt = t.closest('[data-totl]'); if (tt) { s.from = { cl: s.cl, csel: s.csel, name: (EL.querySelector('.wm-pick b') || EL.querySelector('.wm-chip[aria-pressed="true"]'))?.textContent.replace(/\s+(PR\s*)?\d+(\/\d+)?$/, '') || '関連する作業' }; s.view = 'issue'; s.isel = +tt.dataset.totl; s.ifocus = +tt.dataset.totl; s.ifilt = 'all'; draw(); (EL.querySelector('.wm-pick') || EL.querySelector(`.wm-tl[data-i="${s.isel}"]`))?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
     const cl = t.closest('[data-cl]'); if (cl) { s.cl = cl.dataset.cl; s.csel = null; s.pick = false; s.q = ''; draw(); return; }
     const pk = t.closest('[data-pick]'); if (pk) { s.pick = pk.dataset.pick === '1'; draw(); if (s.pick) EL.querySelector('#wmq')?.focus(); return; }
@@ -382,17 +384,23 @@ function bind(el) {
 }
 
 // 系譜の画面（#70）：住所は #repo=…&lineage=n。開いた所に戻れるよう、元の見方を覚える
-function setHash(n) { try { history.replaceState(null, '', n ? `#repo=${encodeURIComponent(REPO)}&lineage=${n}` : location.pathname + location.search); } catch { /* 住所が書けなくても画面は出す */ } }
+function setHash(n, key = 'lineage') { try { history.replaceState(null, '', n ? `#repo=${encodeURIComponent(REPO)}&${key}=${encodeURIComponent(n)}` : location.pathname + location.search); } catch { /* 住所が書けなくても画面は出す */ } }
+function openFeature(id, keepBack) {
+  const s = st(REPO);
+  if (keepBack && s.view !== 'lineage' && s.view !== 'fpage') s.linBack = { view: s.view, cl: s.cl, csel: s.csel, ifocus: s.ifocus, name: { feat: '機能の一覧に戻る', cluster: '関連する作業に戻る', issue: 'Issue の経過に戻る' }[s.view] || '戻る' };
+  s.view = 'fpage'; s.feat = id; setHash(id, 'feature'); draw(); EL && EL.scrollIntoView({ block: 'start' });
+}
 function openLineage(n, keepBack) {
   const s = st(REPO);
-  if (keepBack && s.view !== 'lineage') s.linBack = { view: s.view, cl: s.cl, csel: s.csel, ifocus: s.ifocus, name: { feat: '機能に戻る', cluster: '関連する作業に戻る', issue: 'Issue の経過に戻る' }[s.view] || '戻る' };
+  if (keepBack && s.view === 'fpage') s.linBack = { view: 'fpage', feat: s.feat, back: s.linBack, name: '機能のページに戻る' };
+  if (keepBack && s.view !== 'lineage' && s.view !== 'fpage') s.linBack = { view: s.view, cl: s.cl, csel: s.csel, ifocus: s.ifocus, name: { feat: '機能に戻る', cluster: '関連する作業に戻る', issue: 'Issue の経過に戻る' }[s.view] || '戻る' };
   s.view = 'lineage'; s.lin = n; setHash(n); draw(); EL && EL.scrollIntoView({ block: 'start' });
 }
 async function render(el, repo) {
   EL = el; REPO = repo; bind(el); hideDay(); draw();
   const s = st(repo);
   // 住所に系譜があれば、その系譜を開く
-  const h = new URLSearchParams(location.hash.slice(1)); if (h.get('repo') === repo && h.get('lineage')) { s.view = 'lineage'; s.lin = +h.get('lineage'); }
+  const h = new URLSearchParams(location.hash.slice(1)); if (h.get('repo') === repo && h.get('lineage')) { s.view = 'lineage'; s.lin = +h.get('lineage'); } else if (h.get('repo') === repo && h.get('feature')) { s.view = 'fpage'; s.feat = h.get('feature'); }
   try { await load(repo); draw(); } catch (e) { s.note = e.message; draw(); return; }
   // 開いたときに一度だけ、静かに新しい PR と Issue を読む
   if (!s.synced && s.data?.catalog) sync(repo);

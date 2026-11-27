@@ -255,7 +255,9 @@ export function refLines(text: string): { n: number; line: string }[] {
     for (const m of raw.matchAll(REF_RE)) {
       const n = Number(m[1]); if (out.some(x => x.n === n)) continue;
       const at = m.index ?? 0, line = raw.trim();
-      out.push({ n, line: line.length <= 90 ? line : (at > 40 ? '…' : '') + raw.slice(Math.max(0, at - 40), at + 50).trim() + '…' });
+      // 前を切るとき、番号（#1000072 など）の途中で切らない
+      let st0 = Math.max(0, at - 40); while (st0 > 0 && /[#\d]/.test(raw[st0 - 1]) && /[#\d]/.test(raw[st0])) st0--;
+      out.push({ n, line: line.length <= 90 ? line : (st0 > 0 ? '…' : '') + raw.slice(st0, at + 50).trim() + '…' });
     }
   }
   return out;

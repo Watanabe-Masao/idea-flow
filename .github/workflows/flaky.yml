@@ -1,0 +1,32 @@
+# 揺れを数える：画面のテストを同じ条件で何回も走らせ、テストごとの失敗の回数・やり直しの回数・かかった時間をまとめる。
+# 手で動かす（Actions の「flaky」→ Run workflow、回数とブラウザを選ぶ）。マージは止めない
+name: flaky
+on:
+  workflow_dispatch:
+    inputs:
+      times: { description: '何回走らせるか', default: '20' }
+      browsers: { description: 'ブラウザ（chromium,webkit）', default: 'webkit' }
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      - name: run
+        env: { E2E_BROWSERS: '${{ inputs.browsers }}' }
+        run: |
+          for i in $(seq 1 ${{ inputs.times }}); do echo "=== RUN $i"; npm run test:e2e 2>&1 | grep -E '^(ok|not ok) |duration_ms|E2E_RETRY' || true; done | tee out.txt
+      - name: summary
+        run: |
+          node -e '
+          const t=require("fs").readFileSync("out.txt","utf8").split("\n"), st={}; let cur=null, retry=0;
+          for (const l of t) { const m=l.match(/^(ok|not ok) \d+ - (.*)/); if (m) { cur=[m[1],m[2]]; continue; }
+            const d=l.match(/duration_ms: ([\d.]+)/); if (d&&cur) { const s=st[cur[1]]??={n:0,f:0,ms:[]}; s.n++; if(cur[0]!=="ok") s.f++; s.ms.push(+d[1]); cur=null; }
+            if (l.includes("E2E_RETRY")) retry++; }
+          const rows=Object.entries(st).map(([k,s])=>{s.ms.sort((a,b)=>a-b); return `| ${k} | ${s.n} | ${s.f} | ${Math.round(s.ms[s.ms.length>>1])} | ${Math.round(s.ms.at(-1))} |`});
+          const md=["| テスト | 回数 | 失敗 | 中央 ms | 最大 ms |","|---|---|---|---|---|",...rows,"",`やり直し（E2E_RETRY）：${retry}回`].join("\n");
+          require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, md); console.log(md);'

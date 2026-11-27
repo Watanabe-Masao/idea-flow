@@ -65,7 +65,39 @@ function render(d, n, opt = {}) {
     <div class="row" style="margin-top:8px;justify-content:space-between">${opt.back ? `<button class="btn s" data-lnback="1">‹ ${esc(opt.back)}</button>` : '<span></span>'}<button class="btn s" data-cand="1">推測を${cand ? '隠す' : '出す'}</button></div>
     <p class="sub" style="margin:8px 0 0">引き継ぎの系譜</p><p style="margin:2px 0 0;font-weight:700;line-height:1.5">${esc(sum)}</p>
     <div class="ln">${body}</div>
-    ${others.length ? `<h3 style="font-size:15px;margin-top:16px">同じ機能のほかの系譜</h3><ul class="items">${others.map(o => { const a = o.iss[0], z = o.iss.filter(x => x.open); return `<li><a href="#" data-lin="${a.number}">#${a.number} ${esc(a.title)}</a> <small class="sub">${o.iss.length}件${z.length ? `・開いている ${z.length}` : '・すべて閉じた'}</small></li>`; }).join('')}</ul>` : ''}`;
+    ${[...feats].length ? `<p style="margin-top:14px">${[...feats].map(id => (d.features || []).find(f => f.id === id)).filter(Boolean).map(f => `<a class="btn s" href="#" data-fpage="${esc(f.id)}">機能のページ：${esc(f.name)}</a>`).join(' ')}</p>` : ''}${others.length ? `<h3 style="font-size:15px;margin-top:16px">同じ機能のほかの系譜</h3><ul class="items">${others.map(o => { const a = o.iss[0], z = o.iss.filter(x => x.open); return `<li><a href="#" data-lin="${a.number}">#${a.number} ${esc(a.title)}</a> <small class="sub">${o.iss.length}件${z.length ? `・開いている ${z.length}` : '・すべて閉じた'}</small></li>`; }).join('')}</ul>` : ''}`;
 }
-window.Lineage = { render, build };
+// 機能のページ（#70 の2つ目）：その機能を通る系譜の一覧が主役。稼働の帯・開いている Issue（閉じる条件つき）・最近の作業と判断・使うデータ
+const ST = ['直近4日に3件以上マージ', '直近7日にマージあり', '直近7日マージなし'];
+function feature(d, id, opt = {}) {
+  const f = d.features.find(x => x.id === id);
+  if (!f) return `<p class="sub">機能「${esc(id)}」は、この地図にありません。</p>`;
+  const mine = d.issues.filter(i => i.features.includes(f.id));
+  // 系譜：この機能の Issue がいる系譜（重ならないように）。開いている Issue がある系譜を先に、新しく動いた順
+  const done = new Set(), lines = [];
+  for (const i of [...mine].sort((a, b) => b.updated.localeCompare(a.updated))) {
+    if (done.has(i.number)) continue;
+    const L = build(d, i.number); L.iss.forEach(x => done.add(x.number)); lines.push(L);
+  }
+  lines.sort((a, b) => (b.iss.some(i => i.open) - a.iss.some(i => i.open)) || b.iss.at(-1).created.localeCompare(a.iss.at(-1).created));
+  const lineRow = L => { const a = L.iss[0], open = L.iss.filter(i => i.open), z = open.at(-1) || L.iss.at(-1), hand = L.spine.length - 1;
+    return `<li class="fp-ln"><a href="#" data-lin="${z.number}"><b>#${a.number} ${esc(a.title)}</b>${L.iss.length > 1 ? ` → <b>#${z.number}</b>` : ''}</a>
+      <small class="sub">${L.iss.length > 1 ? `${L.iss.length}件・引き継ぎ${hand}回` : '1件'}・${open.length ? `開いている ${open.length}` : 'すべて閉じた'}</small></li>`; };
+  const max = Math.max(1, ...f.days), cell = v => `<i title="${v}" style="height:${v ? 6 + Math.round(v / max * 22) : 2}px;background:${v ? 'var(--ink)' : 'var(--line)'}"></i>`;
+  const own = (d.owns || []).filter(o => f.recent.some(p => p.n === o.n));
+  return `<style>.fp-strip{display:grid;grid-template-columns:repeat(${f.days.length},minmax(0,1fr));gap:2px;align-items:end;height:30px;margin-top:6px}.fp-strip i{display:block;border-radius:2px}
+    .fp-ln{padding:8px 0;border-top:1px solid var(--line);list-style:none}.fp-ln a{color:var(--ink);text-decoration:none;line-height:1.5}.fp-ul{padding:0;margin:4px 0}</style>
+    <div class="row" style="margin-top:8px">${opt.back ? `<button class="btn s" data-lnback="1">‹ ${esc(opt.back)}</button>` : ''}</div>
+    <p class="sub" style="margin:8px 0 0">機能 · ${esc(f.group)}</p><h2 style="margin:2px 0 0;font-size:20px">${esc(f.name)}</h2>
+    <p class="sub" style="margin:4px 0 0">${esc(ST[f.state])}・この期間 ${f.span}件・最後 ${f.last ? md(f.last) : 'なし'}</p>
+    <div class="fp-strip" aria-label="日ごとのマージの数">${f.days.map(cell).join('')}</div>
+    <h3 style="font-size:16px;margin-top:16px">この機能を通る系譜（${lines.length}）</h3>
+    ${lines.length ? `<ul class="fp-ul">${lines.slice(0, 20).map(lineRow).join('')}</ul>${lines.length > 20 ? `<p class="sub">ほか ${lines.length - 20}</p>` : ''}` : '<p class="sub">この機能の Issue はまだありません。</p>'}
+    <h3 style="font-size:16px;margin-top:16px">開いている Issue（${mine.filter(i => i.open).length}）</h3>
+    <ul class="fp-ul">${mine.filter(i => i.open).map(i => `<li class="fp-ln"><a href="#" data-lin="${i.number}">#${i.number} ${esc(i.title)}</a>${i.cond ? `<div class="sub" style="font-size:13px">閉じる条件：${esc(i.cond)}</div>` : '<div class="sub" style="font-size:12px">「閉じる条件：」なし</div>'}</li>`).join('') || '<li class="sub" style="list-style:none">なし</li>'}</ul>
+    <h3 style="font-size:16px;margin-top:16px">最近の作業</h3>
+    <ul class="fp-ul">${f.recent.map(p => `<li class="fp-ln"><a href="${esc(p.url)}" target="_blank" rel="noopener">PR #${p.n} ${esc(p.t)}</a> <small class="sub">${md(p.day)}</small>${own.filter(o => o.n === p.n).map(o => `<div class="sub" style="font-size:12px">判断：${esc(o.t)}</div>`).join('')}</li>`).join('') || '<li class="sub" style="list-style:none">なし</li>'}</ul>
+    <p class="sub" style="margin-top:12px">${esc(f.desc)}${f.data.length ? `　データ：${esc(f.data.map(k => d.nodes[k]?.name || k).join('、'))}` : ''}</p>`;
+}
+window.Lineage = { render, build, feature };
 })();

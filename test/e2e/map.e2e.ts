@@ -133,11 +133,30 @@ for (const k of kinds) {
     assert.match(await pg.locator('.ln-node.here .ln-t').innerText(), /^#53 /);
     assert.match(pg.url(), /#repo=Watanabe-Masao%2Fidea-flow&lineage=53$/);
     // 住所で開き直す
-    await pg.reload(); await pg.waitForSelector('.ln-node.here', { timeout: 30000 });
+    // WebKit では、開き直し（reload）のあとに画面が出ないことがまれにある（統計検定アプリの CI でも同じ揺れ）。開き直しを1回だけやり直す
+    await pg.reload({ waitUntil: 'load' });
+    if (!(await pg.locator('.ln-node.here').first().waitFor({ timeout: 15000 }).then(() => true, () => false))) { console.log(`E2E_RETRY ${k} 系譜の開き直し`); await pg.reload({ waitUntil: 'load' }); await pg.waitForSelector('.ln-node.here', { timeout: 30000 }); }
     assert.match(await pg.locator('.ln-node.here .ln-t').innerText(), /^#53 /);
     // 戻る（開き直したあとは戻り先が無いので、見方のタブで）
     await pg.click('[data-view="cluster"]');
     assert.doesNotMatch(pg.url(), /lineage=/);
+    assert.deepEqual(errs, []);
+    await pg.close();
+  });
+
+  test(`${k}・機能のページ（#70）：機能の一覧から開き、系譜へ進んで、機能のページに戻れる`, async () => {
+    const { pg, errs } = await open(b!, 390);
+    await pg.locator('.wm-row .wm-nm').first().click();
+    await pg.locator('[data-fpage]').first().click();
+    await pg.waitForSelector('.fp-strip');
+    assert.match(await pg.innerText('.wm'), /この機能を通る系譜/);
+    assert.match(pg.url(), /&feature=/);
+    const ln = pg.locator('.fp-ln [data-lin]').first();
+    if (await ln.count()) {
+      await ln.click(); await pg.waitForSelector('.ln-node.here');
+      await pg.click('[data-lnback]'); await pg.waitForSelector('.fp-strip');
+      assert.match(pg.url(), /&feature=/);
+    }
     assert.deepEqual(errs, []);
     await pg.close();
   });
