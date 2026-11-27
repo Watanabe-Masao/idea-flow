@@ -3,6 +3,7 @@ import { embedMany, MODEL } from './embed.ts';
 import { errorJson, json, jstDay, newId, nowIso, safeEqual } from './util.ts';
 import { analyze, dismiss, listFiles, rulesView, saveSource, setExternal, syncRules } from './rules.ts';
 import { mapView, syncMap } from './workmap.ts';
+import { CATALOGS } from './catalogs.ts';
 import { markToday, seenToday, todayView } from './today.ts';
 
 const isAdmin = (req: Request, env: Env) => {
@@ -19,6 +20,8 @@ export async function handleApi(req: Request, env: Env): Promise<Response> {
     if (req.method === 'GET' && p === '/api/events') {
       return json((await env.DB.prepare('SELECT * FROM events ORDER BY at DESC LIMIT 100').all()).results);
     }
+    // 地図があるリポジトリ・プロジェクト（カタログ）の一覧。リポジトリの選択欄に、決まりの文書をまだ取り込んでいないものも出すため（#77）
+    if (req.method === 'GET' && p === '/api/catalogs') return json(Object.entries(CATALOGS).map(([repo, c]) => ({ repo, repos: c.repos ?? [repo] })));
     if (req.method === 'GET' && p === '/api/rules') return json(await rulesView(env));
     if (req.method === 'GET' && p === '/api/rules/doc') {
       const r = url.searchParams.get('repo') ?? '', path = url.searchParams.get('path') ?? '';

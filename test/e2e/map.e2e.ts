@@ -114,6 +114,15 @@ for (const k of kinds) {
     await pg.close();
   });
 
+  test(`${k}・リポジトリの選択欄に、地図のあるプロジェクトが「名前 ＋ 名前」で出る（決まりの文書を取り込んでいなくても）`, async () => {
+    const { pg, errs } = await open(b!, 390, 'today');
+    const opts = await pg.locator('#rrepo option').evaluateAll(os => os.map(o => [(o as HTMLOptionElement).value, o.textContent]));
+    assert.ok(opts.some(([v, l]) => v === 'Watanabe-Masao/stats2-course' && l === 'stats2-course ＋ knowledge-net'), JSON.stringify(opts));
+    assert.ok(!opts.some(([v]) => v === 'Watanabe-Masao/knowledge-net'), 'プロジェクトの中のリポジトリは、代表の1つにまとめる');
+    assert.deepEqual(errs, []);
+    await pg.close();
+  });
+
   test(`${k}・PC：3つの見方を開いてもエラーが出ない`, async () => {
     const { pg, errs } = await open(b!, 1100);
     await pg.click('[data-view="cluster"]');
