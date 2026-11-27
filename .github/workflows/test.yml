@@ -1,0 +1,21 @@
+# テスト：型・単体テスト・画面のテスト（Chromium と WebKit＝iPhone の Safari と同じ中身）。#47
+name: test
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit -p .
+      - run: npm test
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:e2e
